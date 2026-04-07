@@ -13,20 +13,15 @@ TEXTBOOK_DIR       = "./GraphRAG-Bench/textbooks"
 TRIPLETS_PATH      = "./global_knowledge_graph.json"
 QUESTION_BANK_PATH = "./question_bank.json"
 
-# TOPICS = [
-#     "recursion",
-#     "sorting algorithm",
-#     "graph traversal",
-#     "dynamic programming",
-#     "hash table",
-#     "Binary Search Tree"
-# ]
 TOPICS = [
     "recursion",
     "sorting algorithm",
+    "graph traversal",
     "dynamic programming",
     "hash table",
+    "Binary Search Tree"
 ]
+
 
 # ==========================================
 

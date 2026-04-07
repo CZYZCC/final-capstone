@@ -42,49 +42,56 @@ Score 1 — TRIVIAL
     "Which sorting algorithm has O(n log n) average time complexity?"
 
 Score 2 — SIMPLE
-  • Single-algorithm mechanical trace on a small, happy-path input (≤4 elements).
-  • OR one-step formula substitution where the formula is directly named in the question.
-  • The student needs only to follow one rule once; no edge cases, no branching, no
-    interaction between concepts.
+  • Single-algorithm mechanical trace on a small, happy-path input (≤ 6 elements).
+  • OR one-step formula substitution (the formula is directly named or universally known).
+  • The student follows one rule with no branching, no edge condition, no state
+    accumulation across more than 4 steps.
   • Examples: "How many comparisons does insertion sort make on a reverse-sorted
-    N-element array?" (answer = N*(N-1)/2), "Trace BFS on a 3-node graph from node A.",
-    "Apply h(k) = k mod 7 to k=14."
+    N-element array?" (answer = N*(N-1)/2), "Trace BFS on a 3-node graph from A.",
+    "Apply h(k) = k mod 7 to k = 14."
 
 Score 3 — MODERATE
-  • Multi-step trace (≥5 operations) requiring sustained attention to detail.
-  • OR a single algorithm applied to input with ONE non-trivial edge condition
-    (e.g. a collision, a boundary index, a missing base case).
-  • The student must track state across multiple steps but uses only one concept.
-  • Most students who studied carefully can answer; careless ones make errors.
+  • Multi-step trace (≥ 5 distinct state-changing operations) requiring sustained
+    attention to detail, OR a single algorithm applied to input with ONE non-trivial
+    edge condition (collision, boundary, missing base case, etc.).
+  • The student must track evolving state but uses a single concept without surprises.
+  • Most carefully-studying students can answer; careless ones make errors.
 
-Score 4 — CHALLENGING
-  • Requires integrating EXACTLY TWO distinct algorithmic concepts that causally interact
-    (e.g. hash function output → collision resolution policy, or pivot choice → partition
-    depth, or recursion depth → call-stack space usage).
-  • OR requires diagnosing WHY a system fails / comparing two approaches under
-    adversarial or boundary-condition input.
-  • The correct answer is only reachable by mentally executing the full algorithm, not
-    by pattern-matching or rule-of-thumb reasoning.
-  • Well-prepared students will find it hard; less-prepared students have <50% success.
+Score 4 — CHALLENGING  (EITHER of the two paths below qualifies)
+  PATH A — Cross-concept: Requires integrating exactly TWO distinct algorithmic
+    concepts that CAUSALLY INTERACT (e.g. hash function output → collision chain
+    length, pivot choice → recursion depth, base-case design → space complexity).
+    The student must reason across the boundary between the two concepts.
+  PATH B — Deep single-concept adversarial: Uses ONE algorithm, but ALL of:
+    (a) ≥ 10 distinct state-changing operations in a full mental simulation,
+    (b) an adversarial or degenerate input that forces worst-case / boundary behavior,
+    (c) at least ONE non-obvious trap — a specific step where even careful students
+        commonly make a wrong assumption (must be identifiable in the question),
+    (d) the correct answer CANNOT be reached by rule-of-thumb or formula alone;
+        full step-by-step simulation is required.
+  Well-prepared students find it hard; less-prepared ones succeed < 50% of the time.
 
-Score 5 — EXPERT
-  • Synthesises THREE or more concepts with non-obvious causal interactions.
-  • Contains a subtle trap that even well-prepared students consistently miss.
-  • Requires cross-domain reasoning (e.g. how recursion tree depth determines DP
-    table dimensions, or how hash-table load factor affects BFS queue size).
-  • The correct answer cannot be reached without fully simulating the algorithm mentally.
+Score 5 — EXPERT  (EITHER of the two paths below qualifies)
+  PATH A — Multi-concept: Synthesises THREE or more concepts with non-obvious
+    causal interactions or cross-domain reasoning.
+  PATH B — Deep single-concept: ONE algorithm, but the question requires the student
+    to simultaneously reason at TWO distinct levels — e.g. trace the algorithm's
+    concrete execution AND diagnose why a correctness or complexity claim is violated,
+    or identify BOTH the algorithm's output AND the invariant it breaks, in a single
+    question. The correct answer contradicts the intuition of most prepared students.
 
 === SCORING DISCIPLINE ===
-- Assign score 2 to any question where the answer is a direct formula result,
-  even if the formula itself requires knowing which formula to apply.
-- Assign score 3 only when the trace has ≥ 5 distinct state-changing operations.
-- Do NOT award score 4 or 5 unless you can name the two (or three) concepts and
-  describe their causal interaction explicitly.
-- Default to the LOWER score when you are uncertain between two adjacent scores.
+- Assign score 2 if the answer follows from a named formula or a ≤ 4-step trace,
+  regardless of how the question is phrased.
+- Assign score 3 only when ≥ 5 distinct state-changing operations must be executed.
+- Assign score 4 via PATH A only when you can name BOTH concepts and state the causal
+  direction. Assign score 4 via PATH B only when you can identify the specific
+  non-obvious trap AND confirm the trace requires ≥ 10 operations.
+- Default to the LOWER score when uncertain between two adjacent levels.
 
 Return ONLY valid JSON, no markdown:
-{{"score": <integer 1-5>, "reasoning": "2-3 sentence explanation citing specific evidence \
-from the question text"}}
+{{"score": <integer 1-5>, "reasoning": "2-3 sentence explanation citing the specific \
+path (A or B) and the concrete evidence from the question text"}}
 """
 
 
@@ -146,8 +153,8 @@ _DIFFICULTY_BOOST_TEMPLATE = """\
 ║            ⚠  DIFFICULTY BOOST REQUIRED  ⚠              ║
 ╚══════════════════════════════════════════════════════════╝
 
-The question below was generated and then REJECTED by an automated difficulty
-reviewer. It received a score of {score}/5, which is at or below the minimum
+The question below was REJECTED by an automated difficulty reviewer.
+It received a score of {score}/5, which is at or below the minimum
 acceptable threshold of {threshold}/5:
 
 --- REJECTED QUESTION ---
@@ -157,20 +164,29 @@ acceptable threshold of {threshold}/5:
 REVIEWER'S REASON FOR LOW SCORE:
   "{judge_reasoning}"
 
-You MUST produce a question that scores AT LEAST {threshold}/5 on the rubric below.
-The following are STRICTLY FORBIDDEN in your new question:
-  ✗  Score 1 (trivial): pure definition recall — "What is X?", "What does BFS use?"
-  ✗  Score 2 (simple):  direct formula substitution — "comparisons = N*(N-1)/2",
-     single-step trace on ≤4 happy-path elements, one rule applied once.
-  ✗  Any question structurally similar to the rejected one above.
+You MUST produce a question that scores AT LEAST {threshold}/5.
+The following are STRICTLY FORBIDDEN:
+  ✗  Score 1: pure definition recall
+  ✗  Score 2: direct formula substitution, trace on ≤ 6 happy-path elements,
+     or any question structurally similar to the rejected one above
 
-Your new question MUST qualify for score 3, 4, or 5:
-  ✓  Score 3 minimum: multi-step trace (≥5 state-changing operations) OR one
-     algorithm applied to input with a genuine edge condition.
-  ✓  Score 4 preferred: TWO distinct algorithmic concepts that CAUSALLY INTERACT
-     (name both concepts explicitly in generator_scratchpad.graph_concepts_used).
-     Use an adversarial or boundary-condition input, not a happy-path trace.
-  ✓  Score 5 if possible: THREE concepts with non-obvious cross-domain interactions.
+To reach score 4, choose ONE of these two valid paths:
+
+  PATH A — Cross-concept (easier if you have graph context):
+    Combine TWO distinct algorithmic concepts that causally interact.
+    Name both explicitly. Example: "how does the hash function's output
+    determine the length of the linear-probing collision chain?"
+
+  PATH B — Deep single-concept adversarial (works without graph context):
+    Use ONE algorithm, but satisfy ALL four conditions:
+    (a) The student must execute ≥ 10 distinct state-changing steps
+    (b) Use an adversarial or degenerate input (worst-case, all-equal,
+        reverse-sorted, degenerate tree, all-collision hash keys, etc.)
+    (c) Embed ONE non-obvious trap — a specific step where even careful
+        students commonly make a wrong assumption. State the trap clearly
+        in generator_scratchpad.edge_case_justification.
+    (d) The correct answer must be unreachable without full simulation;
+        no formula or rule-of-thumb can shortcut to the answer.
 
 """
 
@@ -528,10 +544,16 @@ Tag each with: [Boundary Error] | [Initialization Error] | [Procedural Omission]
         # Difficulty-filter retry loop (VECTOR_RAG / BaselineGenerator)
         # boost_block starts empty; filled with judge feedback after EASY rating
         # ------------------------------------------------------------------
+        # Difficulty-filter retry loop (VECTOR_RAG / BaselineGenerator)
+        # Tracks the BEST candidate across all attempts (not just the last).
+        # ------------------------------------------------------------------
         candidate_json = ""
-        last_score     = DIFFICULTY_THRESHOLD   # default: acceptable
+        best_json      = ""
+        best_score     = 0
+        best_reasoning = ""
+        last_score     = DIFFICULTY_THRESHOLD
         last_reasoning = ""
-        boost_block    = ""                     # injected into prompt on retries
+        boost_block    = ""
 
         for attempt in range(MAX_DIFFICULTY_RETRIES):
             active_prompt = boost_block + prompt
@@ -558,6 +580,12 @@ Tag each with: [Boundary Error] | [Initialization Error] | [Procedural Omission]
                 f"Score={last_score}/5 — {last_reasoning}"
             )
 
+            # Always keep the highest-scoring candidate seen so far
+            if last_score > best_score:
+                best_score     = last_score
+                best_json      = candidate_json
+                best_reasoning = last_reasoning
+
             if last_score > DIFFICULTY_THRESHOLD:
                 break
 
@@ -569,18 +597,23 @@ Tag each with: [Boundary Error] | [Initialization Error] | [Procedural Omission]
         else:
             print(
                 f"[DIFFICULTY FILTER | VECTOR_RAG] All {MAX_DIFFICULTY_RETRIES} attempts scored "
-                f"≤ {DIFFICULTY_THRESHOLD}/5. Accepting last (score={last_score})."
+                f"≤ {DIFFICULTY_THRESHOLD}/5. Accepting best seen (score={best_score})."
             )
 
+        # Use the best candidate across all attempts
+        final_json      = best_json if best_json else candidate_json
+        final_score     = best_score if best_json else last_score
+        final_reasoning = best_reasoning if best_json else last_reasoning
+
         try:
-            q_data = json.loads(candidate_json)
-            q_data["difficulty_score"]     = last_score
-            q_data["difficulty_reasoning"] = last_reasoning
-            candidate_json = json.dumps(q_data, ensure_ascii=False)
+            q_data = json.loads(final_json)
+            q_data["difficulty_score"]     = final_score
+            q_data["difficulty_reasoning"] = final_reasoning
+            final_json = json.dumps(q_data, ensure_ascii=False)
         except Exception:
             pass
 
-        return candidate_json, "baseline_generated"
+        return final_json, "baseline_generated"
 
 
 # ---------------------------------------------------------------------------
@@ -671,9 +704,12 @@ No external context. Use only your parametric knowledge.
 
         # ------------------------------------------------------------------
         # Difficulty-filter retry loop (NO_RETRIEVAL)
-        # boost_block starts empty; filled with judge feedback when score <= threshold
+        # Tracks the BEST candidate across all attempts (not just the last).
         # ------------------------------------------------------------------
         candidate_json = ""
+        best_json      = ""
+        best_score     = 0
+        best_reasoning = ""
         last_score     = DIFFICULTY_THRESHOLD
         last_reasoning = ""
         boost_block    = ""
@@ -703,6 +739,11 @@ No external context. Use only your parametric knowledge.
                 f"Score={last_score}/5 — {last_reasoning}"
             )
 
+            if last_score > best_score:
+                best_score     = last_score
+                best_json      = candidate_json
+                best_reasoning = last_reasoning
+
             if last_score > DIFFICULTY_THRESHOLD:
                 break
 
@@ -714,18 +755,22 @@ No external context. Use only your parametric knowledge.
         else:
             print(
                 f"[DIFFICULTY FILTER | NO_RETRIEVAL] All {MAX_DIFFICULTY_RETRIES} attempts scored "
-                f"≤ {DIFFICULTY_THRESHOLD}/5. Accepting last (score={last_score})."
+                f"≤ {DIFFICULTY_THRESHOLD}/5. Accepting best seen (score={best_score})."
             )
 
+        final_json      = best_json if best_json else candidate_json
+        final_score     = best_score if best_json else last_score
+        final_reasoning = best_reasoning if best_json else last_reasoning
+
         try:
-            q_data = json.loads(candidate_json)
-            q_data["difficulty_score"]     = last_score
-            q_data["difficulty_reasoning"] = last_reasoning
-            candidate_json = json.dumps(q_data, ensure_ascii=False)
+            q_data = json.loads(final_json)
+            q_data["difficulty_score"]     = final_score
+            q_data["difficulty_reasoning"] = final_reasoning
+            final_json = json.dumps(q_data, ensure_ascii=False)
         except Exception:
             pass
 
-        return candidate_json, "no_retrieval"
+        return final_json, "no_retrieval"
 
 
 # ---------------------------------------------------------------------------
@@ -806,7 +851,10 @@ class SmartGenerator:
         """
         candidate_json = initial_json
         final_method   = initial_method
-        last_score     = DIFFICULTY_THRESHOLD   # default: acceptable
+        best_json      = ""
+        best_score     = 0
+        best_reasoning = ""
+        last_score     = DIFFICULTY_THRESHOLD
         last_reasoning = ""
 
         # Attempt 1: the question was already generated before calling this method
@@ -815,19 +863,21 @@ class SmartGenerator:
             f"[DIFFICULTY FILTER | GRAPH_RAG | attempt 1/{MAX_DIFFICULTY_RETRIES}] "
             f"Score={last_score}/5 — {last_reasoning}"
         )
+        if last_score > best_score:
+            best_score     = last_score
+            best_json      = candidate_json
+            best_reasoning = last_reasoning
 
         for attempt in range(2, MAX_DIFFICULTY_RETRIES + 1):
             if last_score > DIFFICULTY_THRESHOLD:
                 break
 
-            # Build targeted boost from the rejected question + judge score + reasoning
             boost_block = _build_difficulty_boost(candidate_json, last_score, last_reasoning)
             print(
                 f"  → Score {last_score}/5 ≤ threshold {DIFFICULTY_THRESHOLD}/5. "
                 f"Regenerating with difficulty boost (attempt {attempt}) …"
             )
 
-            # Fetch fresh few-shot examples for the retry
             few_shot_examples = []
             if qb_retriever is not None and qb_retriever.available:
                 few_shot_examples = qb_retriever.retrieve_similar(
@@ -848,22 +898,31 @@ class SmartGenerator:
                 f"[DIFFICULTY FILTER | GRAPH_RAG | attempt {attempt}/{MAX_DIFFICULTY_RETRIES}] "
                 f"Score={last_score}/5 — {last_reasoning}"
             )
+
+            if last_score > best_score:
+                best_score     = last_score
+                best_json      = candidate_json
+                best_reasoning = last_reasoning
         else:
             if last_score <= DIFFICULTY_THRESHOLD:
                 print(
                     f"[DIFFICULTY FILTER | GRAPH_RAG] All {MAX_DIFFICULTY_RETRIES} attempts scored "
-                    f"≤ {DIFFICULTY_THRESHOLD}/5. Accepting last (score={last_score})."
+                    f"≤ {DIFFICULTY_THRESHOLD}/5. Accepting best seen (score={best_score})."
                 )
 
+        final_json      = best_json if best_json else candidate_json
+        final_score     = best_score if best_json else last_score
+        final_reasoning = best_reasoning if best_json else last_reasoning
+
         try:
-            q_data = json.loads(candidate_json)
-            q_data["difficulty_score"]     = last_score
-            q_data["difficulty_reasoning"] = last_reasoning
-            candidate_json = json.dumps(q_data, ensure_ascii=False)
+            q_data = json.loads(final_json)
+            q_data["difficulty_score"]     = final_score
+            q_data["difficulty_reasoning"] = final_reasoning
+            final_json = json.dumps(q_data, ensure_ascii=False)
         except Exception:
             pass
 
-        return candidate_json, final_method
+        return final_json, final_method
 
     # ------------------------------------------------------------------
     # Private helpers
