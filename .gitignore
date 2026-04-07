@@ -16,8 +16,8 @@ GraphRAG-Bench/
 
 # (可选) 如果这两个 JSON 文件是由代码自动生成的产物，且文件较大，建议也不要提交
 # 如果你想把生成的题库和图谱作为代码库的一部分开源给别人看，可以在前面加 # 注释掉这两行
-global_knowledge_graph.json
-question_bank.json
+# global_knowledge_graph.json
+# question_bank.json
 
 # ==============================
 # 4. Python 缓存与系统垃圾文件
