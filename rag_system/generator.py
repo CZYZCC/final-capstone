@@ -433,16 +433,12 @@ To reach score 4, choose ONE of these two valid paths:
     Name both explicitly. Example: "how does the hash function's output
     determine the length of the linear-probing collision chain?"
 
-  PATH B — Deep single-concept adversarial (works without graph context):
+  PATH B — Deep single-concept adversarial:
     Use ONE algorithm, but satisfy ALL four conditions:
-    (a) The student must execute ≥ 10 distinct state-changing steps
-    (b) Use an adversarial or degenerate input (worst-case, all-equal,
-        reverse-sorted, degenerate tree, all-collision hash keys, etc.)
-    (c) Embed ONE non-obvious trap — a specific step where even careful
-        students commonly make a wrong assumption. State the trap clearly
-        in generator_scratchpad.edge_case_justification.
-    (d) The correct answer must be unreachable without full simulation;
-        no formula or rule-of-thumb can shortcut to the answer.
+    (a) The student must execute 5 to 8 distinct state-changing steps. KEEP INPUTS SMALL (e.g., arrays ≤ 6 elements, n ≤ 6) so the math can be verified manually. Do NOT use massive numbers like n=100.
+    (b) Use an adversarial or degenerate input (worst-case, all-equal, reverse-sorted, degenerate tree).
+    (c) Embed ONE non-obvious trap.
+    (d) CRITICAL: You MUST incorporate the KNOWLEDGE GRAPH RELATIONS into the trap or the steps. Do not ignore the graph.
 
 """
 
@@ -480,11 +476,10 @@ To reach score 4, choose ONE of these two valid paths:
       • TCP session state → stateful vs stateless firewall behaviour differences
 
   PATH B — Deep single-concept adversarial:
-    ONE mechanism, but the question presents a SUBTLE MISCONCEPTION or EDGE CASE
-    that even well-prepared students commonly miss.
+    ONE mechanism, but the question presents a SUBTLE MISCONCEPTION or EDGE CASE.
     (a) The scenario must appear superficially correct or safe.
-    (b) The trap must hinge on a specific technical detail (not vague intuition).
-    (c) Each wrong answer must correspond to an identifiable, named misconception.
+    (b) The trap must hinge on a specific technical detail.
+    (c) CRITICAL: You MUST NOT invent fake protocols or arbitrary rules (e.g., fake cache eviction policies). You MUST derive the complexity/trap STRICTLY from real mechanisms found in the KNOWLEDGE_GRAPH_RELATIONS.
 
 """
 
@@ -2002,10 +1997,11 @@ Complete "generator_scratchpad" FIRST, then fill "mcq_data".
                 "true_false": ("The statement should make a claim that is TRUE or FALSE "
                                "specifically because of one of the listed relations — "
                                "not a general CS fact the LLM already knows."),
-                "fill_blank": ("The sentence should contain a blank that can only be filled "
-                               "correctly by knowing a SPECIFIC relation listed above "
-                               "(e.g. 'When [subject] performs X, the result is ___ '). "
-                               "Do NOT write a generic sentence that ignores the graph."),
+                "fill_blank": ("The question MUST require the student to mentally trace through "
+                               "AT LEAST TWO connected relations from the graph to determine the "
+                               "blank's value. For example, trace from [subject A] to [object B], "
+                               "and then apply a boundary condition to get the final answer. "
+                               "Do NOT write a generic sentence that only requires one fact."),
                 "open_answer":("The question should ask the student to trace through "
                                "AT LEAST TWO of the listed relations in sequence."),
             }.get(fmt, "Use at least two of the above relations in the question logic.")
@@ -2255,14 +2251,10 @@ Return ONLY valid JSON:
 {nodes_str}
 {graph_block}
 {few_shot_blk}=== REQUIREMENTS ===
-- SENTENCE LENGTH: ONE sentence only (≤ 40 words). The sentence itself is NOT a scenario
-  description. Do NOT write paragraphs, code blocks, or multi-sentence setups.
-  BAD (too long): "Consider a recursive function that traverses a binary tree of height 15
-    where every node has only a right child. After the initial call, the function will make
-    exactly ___ total recursive calls."
-  GOOD (one sentence): "A degenerate binary tree of height n with only right children causes
-    recursive traversal to make ___ calls, matching the worst-case complexity ___."
-- Use ___ to mark each blank. 1–3 blanks maximum.
+- QUESTION LENGTH: Limit to 2-3 concise sentences. You MAY briefly describe an adversarial scenario, boundary condition, or specific mechanism interaction to set up the problem.
+- INPUT SIZE: If computational, keep inputs SMALL (e.g., array size ≤ 6, n ≤ 6). Do NOT use large numbers like n=100 that cannot be humanly traced.
+- NO FAKE RULES: Do not invent arbitrary policies. Use real computer science mechanisms explicitly found in the graph.
+- The final sentence must contain the blanks (___). 1–3 blanks maximum.
 - {diff_note}
 - {type_forbidden_fb}
 - Before writing the final JSON, independently solve every blank and ensure the
@@ -2539,8 +2531,9 @@ Return ONLY valid JSON:
                 return False
             verify_prompt = (
                 "Independently solve the following fill-in-the-blank question.\n"
-                "Decide whether each provided answer is correct AND uniquely determined.\n"
-                "If the sentence is ambiguous or underspecified, mark it ambiguous.\n"
+                "Decide whether each provided answer is mathematically or conceptually correct.\n"
+                "NOTE: Accept mathematically equivalent expressions (e.g., O(n) vs O(N)) and exact conceptual synonyms.\n"
+                "CRITICAL: If the math involves counting steps or calls, allow minor semantic variations (e.g., inclusive vs exclusive counting of the initial call). Before returning MISMATCH, double-check if the provided answers are correct under a valid interpretation of the algorithm.\n"
                 "Return ONLY valid JSON with keys verdict, resolved_answers, and reason.\n\n"
                 f"Sentence: {sentence}\n"
                 f"Provided answers: {json.dumps(answers, ensure_ascii=False)}"

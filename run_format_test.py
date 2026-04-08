@@ -44,6 +44,13 @@ TEST_CASES = [
     ("recursion",       "fill_blank",   "computational", "graph_rag"),
     ("recursion",       "fill_blank",   "computational", "vector_rag"),
     ("recursion",       "fill_blank",   "computational", "no_retrieval"),
+    ("dynamic programming", "fill_blank", "conceptual",   "graph_rag"),
+    ("dynamic programming", "fill_blank", "conceptual",   "vector_rag"),
+    ("dynamic programming", "fill_blank", "conceptual",   "no_retrieval"),
+
+    ("binary trees",    "fill_blank",   "conceptual",   "graph_rag"),
+    ("binary trees",    "fill_blank",   "conceptual",   "vector_rag"),
+    ("binary trees",    "fill_blank",   "conceptual",   "no_retrieval"),
 ]
 # ──────────────────────────────────────────────────────────────
 
@@ -196,12 +203,11 @@ def _display_question(data: dict, fmt: str):
 
 def _display_score(score: dict):
     overall = score.get("overall", 0)
-    print(f"  Score: {overall:.2f}/5.0  |  "
-          f"Correct:{score.get('correctness','?')}  "
-          f"Rel:{score.get('relevance','?')}  "
-          f"MH:{score.get('multi_hop_dependency','?')}  "
-          f"EC:{score.get('edge_case_triggering','?')}  "
-          f"GRD:{score.get('graph_relational_depth','?')}")
+    print(f"  Score: {score.get('overall', 0):.2f}/5.0  |  "
+              f"Correct:{score.get('correctness', 0)}  Rel:{score.get('relevance', 0)}  "
+              f"DP:{score.get('diagnostic_power', 0)}  "
+              f"MH:{score.get('multi_hop_dependency', 0)}  EC:{score.get('edge_case_triggering', 0)}  "
+              f"GRD:{score.get('graph_relational_depth', 0)}  Div:{score.get('diversity', 0)}")
     if score.get("error"):
         print(f"  [Eval error] {score['error']}")
 
