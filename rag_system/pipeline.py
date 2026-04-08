@@ -49,20 +49,50 @@ class Pipeline:
             self.logger.log(f"\n{'='*60}\n>>> Topic: {topic}\n{'='*60}")
 
             # Group A: NO_RETRIEVAL
-            nr_json, _       = self.no_ret_gen.generate(topic)
+            nr_json, _       = self.no_ret_gen.generate(topic, qb_retriever)  # <--- 修改这里：传入 qb_retriever
             nr_score         = self.evaluator.evaluate(nr_json, [], topic)
             self._log_and_save("NO_RETRIEVAL", topic, nr_json, nr_score, [], "no_retrieval")
 
             # Group B: VECTOR_RAG
             v_ctx            = vec_retriever.retrieve(topic)
-            v_json, _        = self.vector_rag_gen.generate(topic, v_ctx)
+            v_json, _        = self.vector_rag_gen.generate(topic, v_ctx, qb_retriever)  # <--- 修改这里：传入 qb_retriever
             v_score          = self.evaluator.evaluate(v_json, v_ctx, topic)
             self._log_and_save("VECTOR_RAG", topic, v_json, v_score, v_ctx, "vector_rag")
 
             # Group C: GRAPH_RAG
-            g_ctx            = graph_retriever.retrieve_subgraph(topic)
+            # When the retrieved subgraph is sparse (< 20 relations), the graph alone
+            # provides insufficient context. Rather than falling back entirely to
+            # VECTOR_RAG, we enrich g_ctx by merging the vector-retrieved nodes in.
+            # This preserves whatever graph relations exist while filling the content
+            # gap with semantically relevant knowledge slices — giving the SmartGenerator
+            # both the relational structure and enough factual grounding to work with.
+            SPARSE_GRAPH_THRESHOLD = 20
+            # MERGE_TOP_K must be larger than the graph retriever's internal seed
+            # count (top_k=5) so we fetch nodes BEYOND the seeds already included
+            # in g_ctx — otherwise dedup removes everything and merge adds 0 nodes.
+            MERGE_TOP_K = 15
+            g_ctx       = graph_retriever.retrieve_subgraph(topic)
+            n_relations = len(g_ctx.get('relations', []))
+            if n_relations < SPARSE_GRAPH_THRESHOLD:
+                existing_ids   = {n['node_id'] for n in g_ctx.get('nodes', [])}
+                extended_v_ctx = vec_retriever.retrieve(topic, top_k=MERGE_TOP_K)
+                extra_nodes    = [
+                    {'node_id': v['node_id'], 'content': v['content']}
+                    for v in extended_v_ctx
+                    if v['node_id'] not in existing_ids
+                ]
+                g_ctx = {
+                    'nodes':     g_ctx.get('nodes', []) + extra_nodes,
+                    'relations': g_ctx.get('relations', []),
+                }
+                self.logger.log(
+                    f"   [GRAPH_RAG] Sparse subgraph ({n_relations} relations < "
+                    f"{SPARSE_GRAPH_THRESHOLD}). Merged {len(extra_nodes)} vector nodes "
+                    f"(top_k={MERGE_TOP_K}, excluding {len(existing_ids)} existing seeds) "
+                    f"into graph context (total nodes: {len(g_ctx['nodes'])})."
+                )
             g_json, g_method = self.graph_rag_gen.generate(topic, g_ctx, qb_retriever)
-            g_score          = self.evaluator.evaluate(g_json, g_ctx, topic)
+            g_score = self.evaluator.evaluate(g_json, g_ctx, topic)
             self._log_and_save("GRAPH_RAG", topic, g_json, g_score, g_ctx, g_method)
 
             results.append({

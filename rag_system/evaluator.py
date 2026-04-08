@@ -1,4 +1,5 @@
 import json
+import re
 from collections import Counter
 from typing import List, Dict, Tuple, Set
 
@@ -39,6 +40,61 @@ ALL_FORMATS: Set[str] = {
 }
 
 
+_BIG_O_TOKEN_RE = re.compile(r'\bo\s*\((.*?)\)', re.IGNORECASE)
+
+
+def _normalize_fill_blank_answer(text: str) -> str:
+    if not isinstance(text, str):
+        text = str(text)
+    normalized = text.strip().lower()
+    normalized = normalized.replace("≤", "<=").replace("≥", ">=")
+    normalized = normalized.replace("Θ", "theta").replace("θ", "theta")
+    normalized = re.sub(r'[`"\']', "", normalized)
+    normalized = re.sub(r'\b(an?|the)\b', " ", normalized)
+    normalized = re.sub(r'\s+', " ", normalized).strip()
+
+    def _big_o_repl(match: re.Match) -> str:
+        inner = re.sub(r'\s+', "", match.group(1).lower())
+        return f"o({inner})"
+
+    normalized = _BIG_O_TOKEN_RE.sub(_big_o_repl, normalized)
+    return normalized
+
+
+def _fill_blank_precheck(q_data: Dict) -> Dict:
+    sentence = q_data.get('sentence', '')
+    answers = q_data.get('answers', [])
+    explanation = q_data.get('explanation', '')
+    blank_count = sentence.count('___')
+    issues = []
+
+    if not sentence or blank_count == 0:
+        issues.append("missing sentence or blanks")
+    if not isinstance(answers, list):
+        issues.append("answers is not a list")
+        answers = []
+    elif blank_count != len(answers):
+        issues.append(f"blank/answer mismatch: {blank_count} blanks vs {len(answers)} answers")
+
+    normalized = []
+    for idx, answer in enumerate(answers, start=1):
+        if not isinstance(answer, str) or not answer.strip():
+            issues.append(f"answer {idx} is empty")
+        normalized.append(_normalize_fill_blank_answer(answer))
+
+    unique_count = len({a for a in normalized if a})
+    if normalized and unique_count < len(normalized):
+        issues.append("answers contain duplicate normalized values")
+    if explanation and re.search(r'\b(wait|actually|recalculat|re-check|correction)\b', explanation, re.IGNORECASE):
+        issues.append("explanation contains self-correction language")
+
+    return {
+        "blank_count": blank_count,
+        "answer_count": len(answers),
+        "issues": issues,
+    }
+
+
 def _topic_expects_computational(topic: str) -> bool:
     t = topic.lower().strip()
     if any(ct in t for ct in COMPUTATIONAL_TOPICS):
@@ -76,7 +132,18 @@ class AutomatedEvaluator:
         try:
             q_data = json.loads(question_json)
 
+            fill_blank_precheck = None
+            if q_data.get('question_format') == 'fill_blank':
+                fill_blank_precheck = _fill_blank_precheck(q_data)
+
             llm_scores = self._call_llm_judge(q_data, topic)
+            if fill_blank_precheck is not None:
+                llm_scores['fill_blank_precheck'] = fill_blank_precheck
+                if fill_blank_precheck['issues']:
+                    llm_scores['correctness'] = min(
+                        float(llm_scores.get('correctness', 3)),
+                        2.0,
+                    )
 
             r   = float(llm_scores.get('relevance',            3))
             cr  = float(llm_scores.get('correctness',          3))
@@ -158,22 +225,31 @@ class AutomatedEvaluator:
 
         # Build format-specific question block
         if fmt == 'true_false':
+            gg_tf = actual_q_data.get('graph_grounding', q_data.get('graph_grounding', ''))
             question_block = f"""Statement:     {actual_q_data.get('statement', q_data.get('statement', ''))}
 Correct answer: {'True' if actual_q_data.get('tf_answer', q_data.get('tf_answer')) else 'False'}
-Explanation:   {actual_q_data.get('explanation', '')}"""
+Explanation:   {actual_q_data.get('explanation', '')}
+Graph grounding: {gg_tf}"""
         elif fmt == 'fill_blank':
+            gg_fb = actual_q_data.get('graph_grounding', q_data.get('graph_grounding', ''))
             question_block = f"""Sentence:      {actual_q_data.get('sentence', q_data.get('sentence', ''))}
+Blank count:   {actual_q_data.get('sentence', q_data.get('sentence', '')).count('___')}
 Answers:       {json.dumps(actual_q_data.get('answers', q_data.get('answers', [])))}
-Explanation:   {actual_q_data.get('explanation', '')}"""
+Explanation:   {actual_q_data.get('explanation', '')}
+Graph grounding: {gg_fb}"""
         elif fmt == 'open_answer':
+            gg_oa = actual_q_data.get('graph_grounding', q_data.get('graph_grounding', ''))
             question_block = f"""Question:      {actual_q_data.get('question', '')}
 Model answer:  {actual_q_data.get('model_answer', q_data.get('model_answer', ''))}
-Key points:    {json.dumps(actual_q_data.get('key_points', q_data.get('key_points', [])))}"""
+Key points:    {json.dumps(actual_q_data.get('key_points', q_data.get('key_points', [])))}
+Graph grounding: {gg_oa}"""
         elif fmt == 'mcq_multi':
+            gg_mm = actual_q_data.get('graph_grounding', q_data.get('graph_grounding', ''))
             question_block = f"""Question:         {actual_q_data.get('question', '')}
 Options:          {json.dumps(actual_q_data.get('options', {}))}
 Correct answers:  {json.dumps(actual_q_data.get('correct_answers', []))}
-Explanation:      {actual_q_data.get('explanation', '')}"""
+Explanation:      {actual_q_data.get('explanation', '')}
+Graph grounding:  {gg_mm}"""
         else:  # mcq_single (default)
             question_block = f"""Question:         {actual_q_data.get('question', '')}
 Correct answer:   {actual_q_data.get('correct_answer', '')}
@@ -181,15 +257,9 @@ Question type:    {actual_q_data.get('question_type', 'unknown')}
 Generator scratchpad: {json.dumps(scratchpad)}
 Distractors:      {json.dumps(actual_q_data.get('distractors', []))}"""
 
-        # Format-specific diagnostic_power rubric (Strict 1.0-5.0 Mapping)
-        if fmt in ['mcq_single', 'mcq_multi']:
-            dp_rubric = """diagnostic_power (1.0-5.0):
-  1.0 - Random Noise: Distractors are generated randomly with no logic.
-  2.0 - Surface Plausibility: Options look plausible (e.g., similar numbers) but lack specific error traceability.
-  3.0 - Arithmetic/Typo Error: Corresponds to simple arithmetic mistakes or basic off-by-one calculation errors.
-  4.0 - Procedural Omission: Perfectly corresponds to forgetting a specific algorithmic step (e.g., forgetting DP base case initialization, or ignoring isolated nodes in graph traversal).
-  5.0 - Cognitive Misconception: Precisely matches the result of confusing Algorithm A with Algorithm B (e.g., using a stack instead of a queue for BFS)."""
-        elif fmt == 'true_false':
+        # Format-specific diagnostic_power rubric — overridden below for mcq + conceptual
+        correctness_rubric_extra = ""
+        if fmt == 'true_false':
             dp_rubric = """diagnostic_power (1.0-5.0):
   1.0-2.0: statement is a vague generalisation or obviously true/false.
   4.0-5.0: statement makes a specific, verifiable claim about a mechanism, consequence, or trade-off that requires deep understanding to evaluate."""
@@ -197,10 +267,85 @@ Distractors:      {json.dumps(actual_q_data.get('distractors', []))}"""
             dp_rubric = """diagnostic_power (1.0-5.0):
   1.0-2.0: blanks can be filled by guessing or by looking up a single keyword.
   4.0-5.0: each blank requires computing or reasoning through a specific step; wrong answers would arise from specific traceable errors."""
-        else:  # open_answer
+            correctness_rubric_extra = """For fill_blank correctness specifically:
+- First verify that the number of blanks matches the number of answers.
+- Judge correctness by whether the provided answers uniquely and correctly fill the blanks in order.
+- If multiple distinct answers would reasonably fit, correctness must be <= 2.0.
+- If the answers are correct but the question is too easy or generic, keep correctness high and penalize diagnostic_power instead.
+- If the explanation contradicts the final answers, treat that as a correctness defect."""
+        elif fmt == 'open_answer':
             dp_rubric = """diagnostic_power (1.0-5.0):
   1.0-2.0: key points are vague or restate the question.
   4.0-5.0: key points specify precise technical criteria a student must address."""
+        else:
+            dp_rubric = ""  # set below after q_type is known
+
+        # All three remaining rubrics are question-type-aware
+        q_type = q_data.get('question_type', 'computational')
+
+        if fmt in ['mcq_single', 'mcq_multi']:
+            if q_type == 'conceptual':
+                dp_rubric = """diagnostic_power (1.0-5.0):
+  1.0 - Random Noise: Distractors are implausible or obviously wrong.
+  2.0 - Surface Plausibility: Distractors sound related but are not traceable to a specific misconception.
+  3.0 - Partial Understanding Error: Each distractor corresponds to a student who understands part of the mechanism but misapplies it (e.g., knowing salts prevent rainbow tables but thinking they also prevent brute-force).
+  4.0 - Conceptual Conflation: Each distractor precisely matches the result of confusing two related but distinct concepts (e.g., confusing collision resistance with preimage resistance, or confusing stateless with stateful firewall behaviour).
+  5.0 - Systemic Misconception: Each distractor reflects a coherent but fundamentally incorrect mental model that a knowledgeable student could hold (e.g., believing ECDSA security is independent of the hash function used)."""
+            else:
+                dp_rubric = """diagnostic_power (1.0-5.0):
+  1.0 - Random Noise: Distractors are generated randomly with no logic.
+  2.0 - Surface Plausibility: Options look plausible (e.g., similar numbers) but lack specific error traceability.
+  3.0 - Arithmetic/Typo Error: Corresponds to simple arithmetic mistakes or basic off-by-one calculation errors.
+  4.0 - Procedural Omission: Perfectly corresponds to forgetting a specific algorithmic step (e.g., forgetting DP base case initialization, or ignoring isolated nodes in graph traversal).
+  5.0 - Cognitive Misconception: Precisely matches the result of confusing Algorithm A with Algorithm B (e.g., using a stack instead of a queue for BFS)."""
+
+        if q_type == 'conceptual':
+            mh_rubric = """multi_hop_dependency (1.0-5.0):
+  1.0 - Single-Step: Recalls one definition or states one isolated fact.
+  2.0 - Shallow Reasoning: Applies a single concept with no causal chain (e.g., "X causes Y").
+  3.0 - Concept Chain: Requires linking two related concepts in sequence (e.g., property A of X affects behavior B of Y).
+  4.0 - Mechanism Interaction: Requires reasoning about how two DISTINCT mechanisms interact causally (e.g., hash collision in component A propagates to a vulnerability in component B).
+  5.0 - Cross-Concept Synthesis: The consequence of one concept is the necessary precondition of a second concept, and missing either breaks the reasoning chain."""
+        else:
+            mh_rubric = """multi_hop_dependency (1.0-5.0):
+  1.0 - Single-Step: Just applying a formula or definition, no intermediate state tracking.
+  2.0 - Shallow Trace: Algorithm executes only 1-2 steps.
+  3.0 - Standard Algorithmic Trace: Completely traces a single independent algorithm where states update in a loop.
+  4.0 - Mechanism Interaction: Triggers the interaction of two different mechanisms within the same algorithm.
+  5.0 - Cross-Concept Synthesis: Output of an upstream concept MUST be the input of a downstream concept (e.g., DFS output used as DP input)."""
+
+        # EC rubric is format-aware: fill_blank and true_false cannot have "adversarial input"
+        # because they have no algorithmic input to perturb. Use a recall/trap difficulty scale.
+        if fmt in ('fill_blank', 'true_false'):
+            ec_rubric = """edge_case_triggering (1.0-5.0):
+  NOTE: This format has no algorithmic 'input'. EC measures the difficulty of the knowledge trap.
+  1.0 - Trivial Recall: Answer is an obvious, commonly-known fact.
+  2.0 - Standard Knowledge: Requires solid understanding but no surprising nuance.
+  3.0 - Subtle Nuance: The correct answer hinges on a specific technical detail that students often confuse (e.g., salts prevent precomputation, NOT brute-force).
+  4.0 - Counterintuitive Trap: Surface reading strongly implies the wrong answer; correct answer requires recognising a non-obvious exception or boundary case.
+  5.0 - Compound Trap: Multiple plausible-looking wrong answers each correspond to a distinct specific misconception; correct answer requires resolving all of them."""
+        elif fmt == 'open_answer':
+            ec_rubric = """edge_case_triggering (1.0-5.0):
+  NOTE: For open-answer questions, EC measures the complexity/depth of the scenario.
+  1.0 - Baseline: Simple, textbook scenario with no complications.
+  2.0 - Standard: Realistic scenario without unusual conditions.
+  3.0 - Boundary Case: Scenario involves a specific failure mode or exception that changes the expected outcome.
+  4.0 - Adversarial Scenario: Scenario is deliberately constructed to expose a non-obvious interaction or failure, requiring deep analysis.
+  5.0 - Compound Scenario: Multiple interacting anomalies; correct analysis requires addressing all of them."""
+        elif q_type == 'conceptual':
+            ec_rubric = """edge_case_triggering (1.0-5.0):
+  1.0 - Baseline Scenario: The most straightforward application of a concept with no complicating conditions.
+  2.0 - Standard Use Case: A realistic scenario with no unusual conditions or exceptions.
+  3.0 - Boundary Condition: The scenario introduces one specific exception that changes the expected outcome (e.g., a defence that works in general but fails under a specific precondition).
+  4.0 - Adversarial Scenario: Deliberately constructed to trigger a known failure mode or exploit a subtle property that even security-aware designers might overlook.
+  5.0 - Compound Trap: Combines multiple simultaneous anomalous conditions, each of which alone might be handled correctly but together create a non-obvious vulnerability."""
+        else:
+            ec_rubric = """edge_case_triggering (1.0-5.0):
+  1.0 - Happy Path: Most basic input, triggers no special branches.
+  2.0 - Average Case: Random input with no special pattern (e.g., standard unsorted array).
+  3.0 - Standard Edge Case: Triggers a specific conditional branch (e.g., duplicates to test stability, or hash collisions).
+  4.0 - Degeneration Test: Input forces the algorithm into its theoretical worst-case complexity (e.g., reverse-sorted array for quicksort).
+  5.0 - Compound Trap: Combines multiple anomalous states simultaneously (e.g., graph with isolated nodes, self-loops, and multi-edges)."""
 
         prompt = f"""You are an elite Computer Science pedagogy expert evaluating a generated exam question.
 Grade this question (format: {fmt}) STRICTLY according to the following rubrics.
@@ -212,22 +357,13 @@ relevance (1.0-5.0):
 
 correctness (1.0-5.0):
   Is the correct answer truly correct and the math/logic flawless? (1.0 = totally wrong, 5.0 = mathematically perfect)
+{correctness_rubric_extra}
 
 {dp_rubric}
 
-multi_hop_dependency (1.0-5.0):
-  1.0 - Single-Step: Just applying a formula or definition, no intermediate state tracking.
-  2.0 - Shallow Trace: Algorithm executes only 1-2 steps.
-  3.0 - Standard Algorithmic Trace: Completely traces a single independent algorithm where states update in a loop.
-  4.0 - Mechanism Interaction: Triggers the interaction of two different mechanisms within the same algorithm.
-  5.0 - Cross-Concept Synthesis: Output of an upstream concept MUST be the input of a downstream concept (e.g., DFS output used as DP input).
+{mh_rubric}
 
-edge_case_triggering (1.0-5.0):
-  1.0 - Happy Path: Most basic input, triggers no special branches.
-  2.0 - Average Case: Random input with no special pattern (e.g., standard unsorted array).
-  3.0 - Standard Edge Case: Triggers a specific conditional branch (e.g., duplicates to test stability, or hash collisions).
-  4.0 - Degeneration Test: Input forces the algorithm into its theoretical worst-case complexity (e.g., reverse-sorted array for quicksort).
-  5.0 - Compound Trap: Combines multiple anomalous states simultaneously (e.g., graph with isolated nodes, self-loops, and multi-edges).
+{ec_rubric}
 
 graph_relational_depth (1.0-5.0):
   1.0 - No Grounding: Relies purely on LLM parametric memory.
