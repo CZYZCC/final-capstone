@@ -925,7 +925,7 @@ class MultiTypeQuestionBankBuilder:
         ]
         return len(existing) >= N_PER_FORMAT
 
-    def _generate_one(self, topic: Dict, fmt: str, triplet_batch: List[Dict]):
+    def _generate_one(self, topic: Dict, fmt: str, triplet_batch: List[Dict], q_type: str):
         if triplet_batch:
             triplet_str = "=== RELEVANT KNOWLEDGE FROM TEXTBOOK ===\n" + "\n".join(
                 f"  ({t['head'][:60]}) --[{t['relation']}]--> ({t['tail'][:80]})"
@@ -935,7 +935,7 @@ class MultiTypeQuestionBankBuilder:
             triplet_str = ""
 
         prompt = triplet_str + _mt_fmt_instruction(
-            fmt, topic["name"], topic["primary_type"], topic["conceptual_angle"]
+            fmt, topic["name"], q_type, topic["conceptual_angle"]
         )
 
         try:
@@ -1006,12 +1006,13 @@ class MultiTypeQuestionBankBuilder:
             return bool(raw_q.get("question")) and bool(raw_q.get("model_answer"))
         return False
 
-    def _to_bank_format(self, raw_q: Dict, topic: Dict, fmt: str, idx: int) -> Dict:
+    def _to_bank_format(self, raw_q: Dict, topic: Dict, fmt: str, idx: int, q_type: str) -> Dict:
         slug = topic["name"].replace(" ", "_").replace("/", "_")
         return {
-            "id":              f"mt_{slug}_{fmt}_{idx:03d}",
+            "id":              f"mt_{slug}_{fmt}_{q_type[:4]}_{idx:03d}",
             "question_format": fmt,
-            "question_type":   topic["primary_type"] if fmt != "open_answer" else "application",
+            "question_type":   q_type,
+            "type":            q_type,
             "topic":           topic["name"],
             "source":          "kg_multitype",
             "question":        raw_q.get("question", raw_q.get("statement", raw_q.get("sentence", ""))),
@@ -1045,47 +1046,55 @@ class MultiTypeQuestionBankBuilder:
             tname = topic["name"]
             matching = self._filter_triplets(all_triplets, topic["keywords"])
             random.shuffle(matching)
-            print(f"\n>>> {tname}  ({topic['primary_type']})  — {len(matching)} 条 triplet")
 
-            for fmt in FORMATS:
-                # 动态计算该题型需要补充的数量
-                existing_count = sum(1 for q in self.questions if q.get("source") == "kg_multitype" and q.get("topic", "").lower() == tname.lower() and q.get("question_format") == fmt)
-                needed = N_PER_FORMAT - existing_count
+            for q_type in ["computational", "conceptual"]:
+                print(f"\n>>> {tname}  ({q_type})  — {len(matching)} 条 triplet")
 
-                if needed <= 0:
-                    print(f"   [{fmt:12s}] 已足够，跳过")
-                    continue
+                for fmt in FORMATS:
+                    # 动态计算该 topic × format × q_type 组合需要补充的数量
+                    existing_count = sum(
+                        1 for q in self.questions
+                        if q.get("source") == "kg_multitype"
+                        and q.get("topic", "").lower() == tname.lower()
+                        and q.get("question_format") == fmt
+                        and (q.get("type") == q_type or q.get("question_type") == q_type)
+                    )
+                    needed = N_PER_FORMAT - existing_count
 
-                print(f"   [{fmt:12s}]", end=" ", flush=True)
-                generated = 0
-                attempts  = 0
-                max_attempts = needed * 3
+                    if needed <= 0:
+                        print(f"   [{fmt:12s}] 已足够，跳过")
+                        continue
 
-                while generated < needed and attempts < max_attempts:
-                    attempts += 1
-                    start = ((attempts - 1) * 8) % max(1, len(matching))
-                    batch = matching[start: start + 8] if matching else []
+                    print(f"   [{fmt:12s}]", end=" ", flush=True)
+                    generated = 0
+                    attempts  = 0
+                    max_attempts = needed * 3
 
-                    raw_q = self._generate_one(topic, fmt, batch)
-                    if raw_q is None:
-                        print("✗gen", end=" ", flush=True); time.sleep(1); continue
+                    while generated < needed and attempts < max_attempts:
+                        attempts += 1
+                        start = ((attempts - 1) * 8) % max(1, len(matching))
+                        batch = matching[start: start + 8] if matching else []
 
-                    if not self._is_valid(raw_q, fmt):
-                        print("✗schema", end=" ", flush=True); time.sleep(0.5); continue
+                        raw_q = self._generate_one(topic, fmt, batch, q_type)
+                        if raw_q is None:
+                            print("✗gen", end=" ", flush=True); time.sleep(1); continue
 
-                    if topic["primary_type"] == "computational" and fmt in ("mcq_single", "fill_blank"):
-                        if not self._verify_computational(raw_q, fmt):
-                            print("✗verify", end=" ", flush=True); time.sleep(1); continue
+                        if not self._is_valid(raw_q, fmt):
+                            print("✗schema", end=" ", flush=True); time.sleep(0.5); continue
 
-                    entry = self._to_bank_format(raw_q, topic, fmt, len(self.questions))
-                    self.questions.append(entry)
-                    self._save()
-                    generated  += 1
-                    total_new  += 1
-                    print("✓", end=" ", flush=True)
-                    time.sleep(1.2)
+                        if q_type == "computational" and fmt in ("mcq_single", "fill_blank"):
+                            if not self._verify_computational(raw_q, fmt):
+                                print("✗verify", end=" ", flush=True); time.sleep(1); continue
 
-                print()
+                        entry = self._to_bank_format(raw_q, topic, fmt, len(self.questions), q_type)
+                        self.questions.append(entry)
+                        self._save()
+                        generated  += 1
+                        total_new  += 1
+                        print("✓", end=" ", flush=True)
+                        time.sleep(1.2)
+
+                    print()
 
         self._save()
         mt_total = sum(1 for q in self.questions if q.get("source") == "kg_multitype")
