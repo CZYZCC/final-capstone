@@ -1,6 +1,6 @@
 """
 run_experiment_generate.py
-Large-Scale Question Generation Script with Checkpointing.
+Large-Scale Question Generation Script with Checkpointing and Isolated Logging.
 Usage:
     python run_experiment_generate.py --model no_retrieval
     python run_experiment_generate.py --model vector_rag
@@ -14,18 +14,23 @@ import argparse
 from tqdm import tqdm
 from dotenv import load_dotenv
 
-# Load environment variables (e.g., DEEPSEEK_API_KEY)
+# Load environment variables
 load_dotenv()
 
 # Import system components
 from rag_system.knowledge_graph import AdvancedKnowledgeGraph
 from rag_system.retriever import VectorBaselineRetriever, LogicGraphRetriever, QuestionBankRetriever
 from rag_system.generator import SmartGenerator, BaselineGenerator, NoRetrievalGenerator
+from rag_system.logger import Logger
 
 # ==========================================
 # EXPERIMENT CONFIGURATION
 # ==========================================
-# 13 Computational Topics
+TEXTBOOK_DIR       = "./GraphRAG-Bench/textbooks"
+TRIPLETS_PATH      = "./global_knowledge_graph.json"
+QUESTION_BANK_PATH = "./question_bank.json"
+
+# Exactly matching the topics in your evaluator.py
 COMPUTATIONAL_TOPICS = [
     "hash table", "merge sort", "quick sort", "heap sort", 
     "bfs graph traversal", "dfs graph traversal", "dynamic programming knapsack", 
@@ -33,7 +38,6 @@ COMPUTATIONAL_TOPICS = [
     "binary search", "hash table linear probing", "data structures and algorithms"
 ]
 
-# 7 Conceptual Topics
 CONCEPTUAL_TOPICS = [
     "cybersecurity", "computer networks", "information retrieval", 
     "machine learning", "operating systems", "database systems", "human-computer interaction"
@@ -41,24 +45,40 @@ CONCEPTUAL_TOPICS = [
 
 TOPICS = COMPUTATIONAL_TOPICS + CONCEPTUAL_TOPICS
 FORMATS = ["mcq_single", "mcq_multi", "true_false", "fill_blank", "open_answer"]
-QUESTIONS_PER_COMBO = 4  # 20 topics * 5 formats * 4 questions = 400 total questions
+QUESTIONS_PER_COMBO = 4  # 20 topics * 5 formats * 4 questions = 400 total questions per model
 
-def initialize_components():
-    """Initialize Knowledge Graph, Retrievers, and API key."""
-    print("[*] Loading knowledge graph and retrievers...")
+def initialize_components(model_name: str):
+    """Initialize Knowledge Graph, Retrievers, Logger, and API key with isolation."""
+    print(f"[*] Loading knowledge graph and retrievers for {model_name}...")
     api_key = os.getenv("DEEPSEEK_API_KEY")
     if not api_key:
         raise ValueError("DEEPSEEK_API_KEY not found in environment variables.")
 
-    kg = AdvancedKnowledgeGraph(logger=None) # Passing None as logger for stdout printing
-    kg.load("global_knowledge_graph.json")
+    # 1. Initialize Logger with Isolated Directory
+    log_dir = f"experiment_data/logs_generate_{model_name}"
+    os.makedirs(log_dir, exist_ok=True)
+    experiment_logger = Logger(log_dir)
+
+    # 2. Initialize Knowledge Graph
+    kg = AdvancedKnowledgeGraph(logger=experiment_logger)
     
+    if os.path.exists(TEXTBOOK_DIR):
+        kg.build_base_structure(TEXTBOOK_DIR)
+    else:
+        print(f"[!] Warning: TEXTBOOK_DIR '{TEXTBOOK_DIR}' not found. Base nodes may be empty.")
+
+    if os.path.exists(TRIPLETS_PATH):
+        kg.load_triplets(TRIPLETS_PATH)
+    else:
+        print(f"[!] Warning: TRIPLETS_PATH '{TRIPLETS_PATH}' not found.")
+    
+    # 3. Initialize Retrievers
     vector_retriever = VectorBaselineRetriever(kg)
     logic_retriever = LogicGraphRetriever(kg, vector_retriever)
     
     from sentence_transformers import SentenceTransformer
     encoder = SentenceTransformer('all-MiniLM-L6-v2')
-    qb_retriever = QuestionBankRetriever("question_bank.json", encoder)
+    qb_retriever = QuestionBankRetriever(QUESTION_BANK_PATH, encoder)
     
     return api_key, kg, vector_retriever, logic_retriever, qb_retriever
 
@@ -69,8 +89,8 @@ def main():
                         help="Target generation model")
     args = parser.parse_args()
 
-    # Initialize system
-    api_key, kg, vector_retriever, logic_retriever, qb_retriever = initialize_components()
+    # Initialize system with the specific model name to isolate logs
+    api_key, kg, vector_retriever, logic_retriever, qb_retriever = initialize_components(args.model)
     
     # Initialize the appropriate generator
     print(f"[*] Initializing {args.model} generator...")
@@ -81,8 +101,6 @@ def main():
     elif args.model == "graph_rag":
         generator = SmartGenerator(api_key=api_key)
 
-    # Prepare output directory and file
-    os.makedirs("experiment_data", exist_ok=True)
     output_file = f"experiment_data/raw_{args.model}.jsonl"
 
     # ==========================================
@@ -127,24 +145,27 @@ def main():
                 for _ in range(needed):
                     start_time = time.time()
                     try:
+                        saved_context = []
                         q_type = "computational" if topic in COMPUTATIONAL_TOPICS else "conceptual"
 
-                        # Retrieve context based on the model
+                        # Retrieve context based on the model and save it for the evaluator
                         if args.model == "no_retrieval":
                             raw_json, method = generator.generate(
-                                topic=topic, question_type=q_type, 
+                                topic=topic, 
                                 qb_retriever=qb_retriever, question_format=q_format
                             )
                         elif args.model == "vector_rag":
                             context = vector_retriever.retrieve(topic, top_k=5)
+                            saved_context = context
                             raw_json, method = generator.generate(
-                                topic=topic, question_type=q_type, context=context, 
+                                topic=topic, context=context, 
                                 qb_retriever=qb_retriever, question_format=q_format
                             )
                         elif args.model == "graph_rag":
                             graph_ctx = logic_retriever.retrieve_subgraph(topic, hops=2)
+                            saved_context = graph_ctx
                             raw_json, method = generator.generate(
-                                topic=topic, question_type=q_type, graph_context=graph_ctx, 
+                                topic=topic, graph_context=graph_ctx, 
                                 qb_retriever=qb_retriever, question_format=q_format
                             )
                         
@@ -156,6 +177,7 @@ def main():
                         q_data["generation_time"] = round(time.time() - start_time, 2)
                         q_data["question_format"] = q_format
                         q_data["expected_type"] = q_type
+                        q_data["retrieved_context"] = saved_context  # <-- Crucial for evaluation
                         
                         # Save to disk immediately
                         out_f.write(json.dumps(q_data, ensure_ascii=False) + "\n")
