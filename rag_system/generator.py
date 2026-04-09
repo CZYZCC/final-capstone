@@ -5,22 +5,6 @@ from typing import List, Dict, Tuple, Optional
 
 from openai import OpenAI
 
-try:
-    from .rv_generator import generate_rv_question
-    _RV_AVAILABLE = True
-except ImportError:
-    _RV_AVAILABLE = False
-
-
-# ---------------------------------------------------------------------------
-# Node content sanitizer
-# ---------------------------------------------------------------------------
-# Knowledge graphs built from heterogeneous sources often contain internal
-# node identifiers (e.g. "tb6_node174", "tb5_node0") as part of node content.
-# When these are injected verbatim into generation prompts the LLM may echo
-# them as if they were real technical terms, producing nonsensical questions
-# with correctness scores near 1-2.  We strip such patterns before any
-# context string is built.
 
 _NODE_ID_RE = re.compile(
     r'\btb\d+_node\d+\b'       # e.g. tb6_node174
@@ -1664,115 +1648,6 @@ If graph relations are provided, use them to create a cross-concept question req
             return raw
         except Exception:
             return raw
-
-    # ------------------------------------------------------------------
-    # FIX-G: RV-Bench generation now uses graph relations for distractors
-    # ------------------------------------------------------------------
-
-    def _generate_rv_question(
-        self,
-        topic: str,
-        graph_context: Optional[Dict] = None,  # FIX-G
-    ) -> Optional[str]:
-        """
-        1. Call rv_generator to get question + code-verified answer.
-        2. Call LLM to generate distractors.
-           FIX-G: if graph_context has relations, inject them into the
-           distractor prompt so the LLM can create distractors that reference
-           causally related concepts (improving multi_hop_dependency score).
-        3. Return final MCQ JSON or None if no RV class exists.
-        """
-        rv = generate_rv_question(topic)
-        if rv is None:
-            return None
-
-        question  = rv["question"]
-        answer    = rv["answer"]
-        algorithm = rv["algorithm"]
-        meta      = rv.get("meta", {})
-
-        # FIX-G: build graph relations context for distractor enrichment
-        graph_relations_block = ""
-        if graph_context and graph_context.get("relations"):
-            relations = graph_context["relations"][:10]
-            rel_lines = "\n".join(
-                f"  ({_sanitize(e['subject'])}) --[{e['predicate']}]--> ({_sanitize(e['object'])})"
-                for e in relations
-            )
-            graph_relations_block = f"""
-=== KNOWLEDGE GRAPH RELATIONS (use these to create richer distractors) ===
-{rel_lines}
-
-When designing distractors, try to reference the causal dependencies shown above.
-For example, a distractor might arise from a student misapplying a relation
-(e.g. using the wrong formula from the graph, or applying a step out of order).
-This makes the question test multi-hop reasoning, not just a single rule.
-"""
-
-        distractor_prompt = f"""You are a CS exam designer. You have a verified computational question and its CORRECT answer (computed by Python code — do NOT change it).
-
-Your job: generate exactly 3 WRONG answer options (distractors) that represent specific, common student mistakes.
-
-=== QUESTION ===
-{question}
-
-=== CORRECT ANSWER (verified by code) ===
-{answer}
-
-=== ALGORITHM ===
-{algorithm}
-
-=== CONTEXT (algorithm parameters) ===
-{json.dumps(meta, indent=2)}
-{graph_relations_block}
-=== DISTRACTOR RULES ===
-Each distractor must:
-1. Be a plausible WRONG answer a student might compute by making ONE specific mistake.
-2. Have an explicit error tag: [Boundary Error] | [Initialization Error] | [Procedural Omission] | [Operator Confusion]
-3. Be clearly different from the correct answer ({answer}).
-4. Be a concrete value (not "it depends" or a range).
-
-=== REQUIRED JSON (return ONLY this, no markdown) ===
-{{
-    "rationale": "Step-by-step explanation of how to reach the correct answer: {answer}",
-    "distractors": [
-        {{"option": "<wrong answer 1>", "explanation": "[Error Tag] Specific traceable mistake"}},
-        {{"option": "<wrong answer 2>", "explanation": "[Error Tag] Specific traceable mistake"}},
-        {{"option": "<wrong answer 3>", "explanation": "[Error Tag] Specific traceable mistake"}}
-    ]
-}}"""
-
-        try:
-            response = self.llm.chat.completions.create(
-                model="deepseek-chat",
-                messages=[{"role": "user", "content": distractor_prompt}],
-                response_format={"type": "json_object"},
-                max_tokens=800,
-            )
-            llm_out     = json.loads(response.choices[0].message.content)
-            distractors = llm_out.get("distractors", [])
-            rationale   = llm_out.get("rationale", "")
-        except Exception:
-            distractors = [
-                {"option": "unknown", "explanation": "[Procedural Omission] Could not generate distractor"},
-            ]
-            rationale = ""
-
-        result = {
-            "question":             question,
-            "correct_answer":       answer,
-            "rationale":            rationale,
-            "distractors":          distractors,
-            "question_type":        "computational",
-            "source":               "rv_generated",
-            "generator_scratchpad": {
-                "algorithm_rules":        f"RV-Bench: {algorithm}",
-                "step_by_step_execution": rationale,
-                "final_state":            answer,
-                "rv_meta":                meta,
-            },
-        }
-        return json.dumps(result, ensure_ascii=False)
 
     # ------------------------------------------------------------------
     # FIX-H: _generate_fresh NOW uses graph relations
