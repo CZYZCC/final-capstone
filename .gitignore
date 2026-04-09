@@ -8,6 +8,7 @@
 # ==============================
 experiment_logs/
 experiment_data/
+experiment_results/
 
 # ==============================
 # 3. 数据集与构建产物
