@@ -31,3 +31,8 @@ __pycache__/
 
 # Mac 系统自动生成的隐藏文件 (如果你或你的协作者用 Mac)
 .DS_Store
+
+run_experiment_generate.py
+run_experiment_evaluate.py
+run_format_test.py
+run_pipeline.py
