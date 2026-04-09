@@ -36,3 +36,4 @@ run_experiment_generate.py
 run_experiment_evaluate.py
 run_format_test.py
 run_pipeline.py
+plot_distribution.py
