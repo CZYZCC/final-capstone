@@ -8,6 +8,8 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 
 from .knowledge_graph import AdvancedKnowledgeGraph
+from rank_bm25 import BM25Okapi
+import string
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +84,7 @@ class LogicGraphRetriever:
     def retrieve_subgraph(
         self,
         topic: str,
-        hops: int = 1,
+        hops: int = 2,
         max_results: int = 10,
         similarity_threshold: float = SIMILARITY_THRESHOLD,
     ) -> Dict:
@@ -301,3 +303,62 @@ class QuestionBankRetriever:
             if q.get('type') == 'computational'
             or q.get('question_type') == 'computational'
         ][:top_k]
+    
+
+    # ----- 将以下代码添加到 retriever.py 的最下方 -----
+
+# ---------------------------------------------------------------------------
+# 4. Hybrid Retriever (Vector + BM25 + RRF) - 新增 Baseline C
+# ---------------------------------------------------------------------------
+
+class HybridRetriever:
+    """
+    结合 Dense Vector 和 Sparse BM25 的混合检索器。
+    使用 RRF (Reciprocal Rank Fusion) 算法进行结果重排。
+    """
+    def __init__(self, vector_retriever: VectorBaselineRetriever):
+        self.vector_retriever = vector_retriever
+        self.kg = vector_retriever.kg
+        self.node_ids = vector_retriever.node_ids
+        
+        # 构建 BM25 索引 (简单分词：去除标点并按空格切分)
+        corpus = []
+        for nid in self.node_ids:
+            text = self.kg.nodes[nid].lower()
+            text = text.translate(str.maketrans('', '', string.punctuation))
+            corpus.append(text.split())
+        self.bm25 = BM25Okapi(corpus)
+
+    def retrieve(self, query: str, top_k: int = 5, rrf_k: int = 60) -> List[Dict]:
+        # 1. 获取向量召回结果 (召回两倍数量用于重排)
+        vec_results = self.vector_retriever.retrieve(query, top_k=top_k * 2)
+        
+        # 2. 获取 BM25 召回结果
+        query_tokens = query.lower().translate(str.maketrans('', '', string.punctuation)).split()
+        bm25_scores = self.bm25.get_scores(query_tokens)
+        bm25_indices = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:top_k * 2]
+        
+        # 3. RRF (Reciprocal Rank Fusion) 分数计算
+        rrf_scores = {}
+        
+        # 处理 Vector 排名
+        for rank, res in enumerate(vec_results):
+            nid = res['node_id']
+            rrf_scores[nid] = rrf_scores.get(nid, 0.0) + 1.0 / (rrf_k + rank + 1)
+            
+        # 处理 BM25 排名
+        for rank, idx in enumerate(bm25_indices):
+            nid = self.node_ids[idx]
+            rrf_scores[nid] = rrf_scores.get(nid, 0.0) + 1.0 / (rrf_k + rank + 1)
+            
+        # 4. 根据 RRF 分数重排并返回 Top-K
+        sorted_nids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)[:top_k]
+        
+        return [
+            {
+                'node_id': nid,
+                'content': self.kg.nodes[nid],
+                'score': rrf_scores[nid]
+            }
+            for nid in sorted_nids
+        ]

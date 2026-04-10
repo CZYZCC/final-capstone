@@ -9,7 +9,7 @@
 experiment_logs/
 experiment_data/
 experiment_results/
-
+experiment_analysis/
 # ==============================
 # 3. 数据集与构建产物
 # ==============================

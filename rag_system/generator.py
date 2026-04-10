@@ -1171,7 +1171,8 @@ class SmartGenerator:
         topic: str,
         graph_context: Dict,
         qb_retriever,
-        question_format: str = "mcq_single",   # NEW: controls which format to generate
+        question_format: str = "mcq_single",
+           naive_mode: bool = False,   # NEW: controls which format to generate
     ) -> Tuple[str, str]:
 
         question_type  = _choose_question_type(topic, qb_retriever)
@@ -1242,10 +1243,10 @@ class SmartGenerator:
             )
 
         if question_type == "computational":
-            raw = self._generate_fresh(topic, graph_context, few_shot_examples)
+            raw = self._generate_fresh(topic, graph_context, few_shot_examples, naive_mode=naive_mode) # 传递参数
         else:
-            raw = self._generate_conceptual(topic, graph_context, few_shot_examples)
-        return self._apply_difficulty_filter(raw, "generated", topic, graph_context,
+            raw = self._generate_conceptual(topic, graph_context, few_shot_examples, naive_mode=naive_mode) # 传递参数
+        return self._apply_difficulty_filter(raw, "generated" if not naive_mode else "naive_generated", topic, graph_context,
                                               question_type, qb_retriever)
 
     # ------------------------------------------------------------------
@@ -1654,15 +1655,16 @@ If graph relations are provided, use them to create a cross-concept question req
     # ------------------------------------------------------------------
 
     def _generate_fresh(self, topic: str, context: Dict, few_shot_examples: List[Dict],
-                        boost_block: str = "") -> str:
+                        boost_block: str = "", naive_mode: bool = False) -> str:
         for _ in range(3):
-            raw = self._do_generate_fresh(topic, context, few_shot_examples, boost_block)
+            # 注意这里：内部调用 _do_generate_fresh 时也要传进去
+            raw = self._do_generate_fresh(topic, context, few_shot_examples, boost_block, naive_mode=naive_mode)
             if self._verify_answer(raw):
                 return raw
         return raw
 
     def _do_generate_fresh(self, topic: str, context: Dict, few_shot_examples: List[Dict],
-                           boost_block: str = "") -> str:
+                           boost_block: str = "", naive_mode: bool = False) -> str:
         one_shot = _sample_oneshot(topic, "computational")
         fewshot_block = "=== EXAMPLE FORMAT ===\n" + json.dumps(one_shot, indent=2) + "\n\n"
         if few_shot_examples:
@@ -1680,7 +1682,11 @@ If graph relations are provided, use them to create a cross-concept question req
                 f"  ({_sanitize(e['subject'])}) --[{e['predicate']}]--> ({_sanitize(e['object'])})"
                 for e in relations[:15]
             )
-            graph_block = f"""
+            if naive_mode:
+                # Naive 模式：只给关系，不给强制使用指令
+                graph_block = f"\n=== RETRIEVED KNOWLEDGE GRAPH RELATIONS ===\n{rel_lines}\n"
+            else:
+                graph_block = f"""
 === KNOWLEDGE GRAPH RELATIONS FOR "{topic}" ===
 {rel_lines}
 
@@ -1768,7 +1774,7 @@ Complete "generator_scratchpad" FIRST, then fill "mcq_data".
 
     def _generate_conceptual(
         self, topic: str, context: Dict, few_shot_examples: List[Dict],
-        boost_block: str = ""
+        boost_block: str = "", naive_mode: bool = False  # <--- 加上参数
     ) -> str:
         nodes_str = "\n".join(
             [f"[{i+1}] {_sanitize(n['content'])[:400]}" for i, n in enumerate(context.get("nodes", []))]
