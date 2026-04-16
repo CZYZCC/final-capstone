@@ -87,7 +87,15 @@ class LogicGraphRetriever:
         hops: int = 2,
         max_results: int = 10,
         similarity_threshold: float = SIMILARITY_THRESHOLD,
+        question_type: str = "computational",   # ★ FIX-PRUNE: new param
     ) -> Dict:
+        # ★ FIX-PRUNE: conceptual topics have weaker cosine similarity between
+        # cross-domain nodes that are still logically necessary (e.g., 2PL + B+Tree).
+        # Using the same 0.25 threshold as computational cuts those cross-domain
+        # nodes and causes correctness failures on conceptual MCQ.
+        # Lower to 0.10 for conceptual so we keep more of the context.
+        if question_type == "conceptual" and similarity_threshold == SIMILARITY_THRESHOLD:
+            similarity_threshold = 0.10
         seeds    = self.vector_retriever.retrieve(topic, top_k=5)
         seed_ids = [s['node_id'] for s in seeds]
         self.kg.logger.log(

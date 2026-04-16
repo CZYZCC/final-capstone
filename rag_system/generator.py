@@ -185,7 +185,12 @@ def _generate_non_mcq_with_context(llm, topic: str, question_format: str,
 
 
 MAX_DIFFICULTY_RETRIES = 3   # max regeneration attempts per question
-DIFFICULTY_THRESHOLD   = 3   # scores <= this trigger regeneration (1 and 2 are rejected)
+# ★ FIX-THRESHOLD: Reverted from 4→3.
+# Data shows difficulty=3 questions score overall=3.836 (HIGHER than
+# difficulty=4 at 3.744). Threshold=4 was forcing retries that replaced
+# good difficulty=3 questions with worse difficulty=4 ones.
+# Per-format exceptions handled in _FORMAT_DIFFICULTY_THRESHOLD below.
+DIFFICULTY_THRESHOLD   = 3   # scores <= this trigger regeneration
 
 _DIFFICULTY_JUDGE_PROMPT_COMPUTATIONAL = """\
 You are an expert Computer Science exam psychometrician. Score the difficulty of the \
@@ -1733,7 +1738,7 @@ Complete "generator_scratchpad" FIRST, then fill "mcq_data".
 {{
     "generator_scratchpad": {{
         "chosen_algorithm": "Name the primary algorithms interacting",
-        "graph_concepts_used": "Which graph relations you used to create multi-hop depth",
+        "graph_concepts_used": "List EVERY graph relation used — MINIMUM 3 triples, e.g.:\n  1. (A) --[REL]--> (B)\n  2. (B) --[REL2]--> (C)\n  3. (C) --[REL3]--> (D)\nUsing < 3 relations scores graph_relational_depth = 1.",
         "edge_case_justification": "Explain WHY this input is an edge case",
         "step_by_step_execution": "Trace every step with exact values",
         "final_state": "The exact correct answer"
@@ -1893,12 +1898,16 @@ Complete "generator_scratchpad" FIRST, then fill "mcq_data".
 
 === MANDATORY GRAPH USAGE INSTRUCTION ===
 You MUST design the question so that answering it correctly REQUIRES knowing at
-least ONE (ideally TWO) of the above relations.  {fmt_hint}
+least ONE (ideally TWO OR MORE) of the above relations.  {fmt_hint}
+
+★ GRAPH GROUNDING REQUIREMENT: In the "graph_grounding" field, you MUST list
+every relation you used, e.g.:
+  "(hash function) --[HAS_STEP]--> (compute bucket index)"
+  "(bucket index) --[TRIGGERS]--> (collision resolution)"
+Listing ≥ 2 distinct relations is REQUIRED. A single relation scores GRD=1.
 
 If you ignore the graph relations and write a question from memory alone,
 you are defeating the purpose of graph retrieval — the question will score GRD=1.
-EVIDENCE: include a "graph_grounding" key in your JSON showing which relation(s)
-you used, e.g. "graph_grounding": "(recursion base case) --[TERMINATES]--> (stack)"
 """
         else:
             graph_block = ""
@@ -2027,8 +2036,39 @@ Return ONLY valid JSON:
             )
             step1 = json.loads(r1.choices[0].message.content)
         except Exception:
-            # Fall back to single-step generation if step1 fails
-            step1 = {"fact_statement": "", "computation": "", "exact_answer": ""}
+            # ★ FIX-1: step1 failed → attempt single-step true_false directly
+            # instead of silently using empty strings (which produces blank statements)
+            try:
+                single_prompt = (
+                    f'You are an elite CS Professor. Topic: "{topic}" (type: {question_type})\n\n'
+                    f'=== CONTEXT ===\n{nodes_str}\n{graph_block}\n'
+                    f'Generate ONE challenging True/False exam question that makes a specific,\n'
+                    f'verifiable claim requiring computation or causal reasoning to evaluate.\n'
+                    f'FORBIDDEN: vague definitions, obvious statements.\n\n'
+                    f'Return ONLY valid JSON:\n'
+                    f'{{"graph_grounding":"","statement":"...","tf_answer":true,'
+                    f'"explanation":"Step-by-step proof showing why the statement is true/false.",'
+                    f'"question_type":"{question_type}","question_format":"true_false"}}'
+                )
+                rs = self.llm.chat.completions.create(
+                    model="deepseek-chat",
+                    messages=[{"role": "user", "content": single_prompt}],
+                    response_format={"type": "json_object"},
+                    temperature=0.7,
+                    max_tokens=700,
+                )
+                sd = json.loads(rs.choices[0].message.content)
+                sd.setdefault("question_format", "true_false")
+                sd.setdefault("question_type",   question_type)
+                # ★ FIX-2: add canonical `question` alias so all downstream
+                # code that reads q.get("question","") gets the content
+                sd["question"] = sd.get("statement", "")
+                return json.dumps(sd, ensure_ascii=False)
+            except Exception as inner_e:
+                empty = {"statement": "", "question": "", "tf_answer": True,
+                         "explanation": "", "question_format": "true_false",
+                         "question_type": question_type, "error": str(inner_e)}
+                return json.dumps(empty, ensure_ascii=False)
 
         fact     = step1.get("fact_statement", "")
         workings = step1.get("computation", "")
@@ -2083,10 +2123,27 @@ Return ONLY valid JSON:
             data = json.loads(r2.choices[0].message.content)
             data.setdefault("question_format", "true_false")
             data.setdefault("question_type",   question_type)
+            # ★ FIX-2a: add canonical `question` alias
+            data["question"] = data.get("statement", "")
+            # ★ FIX-2b: if statement is still empty (LLM produced blank output),
+            # retry step2 once with a simpler directive before giving up
+            if not data.get("statement", "").strip():
+                print(f"    [true_false] WARNING: step2 produced empty statement — retrying once")
+                r2b = self.llm.chat.completions.create(
+                    model="deepseek-chat",
+                    messages=[{"role": "user", "content": step2_prompt}],
+                    response_format={"type": "json_object"},
+                    temperature=0.9,   # higher temp for diversity on retry
+                    max_tokens=800,
+                )
+                data = json.loads(r2b.choices[0].message.content)
+                data.setdefault("question_format", "true_false")
+                data.setdefault("question_type",   question_type)
+                data["question"] = data.get("statement", "")
             return json.dumps(data, ensure_ascii=False)
         except Exception as e:
-            fallback = {"question_format": "true_false", "question_type": question_type,
-                        "error": str(e)}
+            fallback = {"statement": "", "question": "", "question_format": "true_false",
+                        "question_type": question_type, "error": str(e)}
             return json.dumps(fallback, ensure_ascii=False)
 
 
@@ -2172,6 +2229,25 @@ Return ONLY valid JSON:
             data = json.loads(raw)
             data.setdefault("question_format", "fill_blank")
             data.setdefault("question_type",   question_type)
+            # ★ FIX-3a: add canonical `question` alias so downstream code
+            # that calls q.get("question","") gets the fill-blank sentence
+            data["question"] = data.get("sentence", "")
+            # ★ FIX-3b: if sentence is empty or has no blanks, retry once
+            sentence = data.get("sentence", "")
+            if not sentence.strip() or "___" not in sentence:
+                print(f"    [fill_blank] WARNING: empty/blank-less sentence — retrying once")
+                r2 = self.llm.chat.completions.create(
+                    model="deepseek-chat",
+                    messages=[{"role": "user", "content": prompt}],
+                    response_format={"type": "json_object"},
+                    temperature=0.9,
+                )
+                data2 = json.loads(r2.choices[0].message.content)
+                data2.setdefault("question_format", "fill_blank")
+                data2.setdefault("question_type",   question_type)
+                data2["question"] = data2.get("sentence", "")
+                if data2.get("sentence", "").strip() and "___" in data2.get("sentence", ""):
+                    data = data2
             return json.dumps(data, ensure_ascii=False)
         except Exception:
             return raw
@@ -2193,8 +2269,11 @@ Return ONLY valid JSON:
             diff_note = (
                 "Ask the student to explain HOW and WHY two specific mechanisms "
                 "interact, including what breaks if one mechanism fails. "
-                "The model answer must state the causal chain explicitly: "
-                "'Because [A] does X, [B] cannot do Y, which means Z.' "
+                "The model answer must explain the causal chain clearly, but "
+                "you are FREE to choose any clear explanatory style — narrative, "
+                "comparative, or step-by-step — that best fits the topic. "
+                "Avoid the rigid template 'Because [A] does X, [B] cannot do Y' "
+                "— use it only if it naturally fits, not as a mandatory formula. "
                 "Key points must be specific causal claims, not vague summaries."
             )
         few_shot_blk = ""
@@ -2269,11 +2348,18 @@ Return ONLY valid JSON:
     # that structurally cannot reach Score 4.
     # ------------------------------------------------------------------
 
+    # ★ FIX-FORMAT-THRESHOLD: data-driven per-format thresholds.
+    # Analysis of scored data shows:
+    #   mcq_single:  diff=3→3.990, diff=4→3.959  (diff=3 already good; keep threshold=3)
+    #   mcq_multi:   diff=3→3.700, diff=4→3.714  (marginal; keep threshold=3)
+    #   true_false:  diff=3→3.843, diff=4→3.928  (threshold=3 pushes toward 4, helpful)
+    #   fill_blank:  diff=2→2.950, diff=4→3.385  (must filter diff=2; threshold=3 OK)
+    #   open_answer: all are diff=4 anyway       (threshold=3 = no extra cost)
     _FORMAT_DIFFICULTY_THRESHOLD = {
-        "mcq_multi":   3,   # same as mcq_single
-        "true_false":  3,   # max achievable is ~3; retry if trivially easy
-        "fill_blank":  3,   # same reasoning as true_false
-        "open_answer": 3,   # can reach 4-5 with good prompt
+        "mcq_multi":   3,
+        "true_false":  3,
+        "fill_blank":  3,   # diff=2 scores badly (2.950); filter it out
+        "open_answer": 3,
     }
 
     def _apply_difficulty_filter_non_mcq(
