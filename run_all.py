@@ -48,12 +48,12 @@ DATA_DIR           = "experiment_data"
 COMPUTATIONAL_TOPICS = [
     "hash table", "merge sort", "quick sort", "heap sort",
     "bfs graph traversal", "dfs graph traversal", "dynamic programming knapsack",
-    "recursion", "binary search tree", "dijkstra shortest path",
+    "recursion",
     "binary search", "hash table linear probing", "data structures and algorithms",
 ]
 CONCEPTUAL_TOPICS = [
-    "cybersecurity", "computer networks", "information retrieval",
-    "machine learning", "operating systems", "database systems",
+    "computer networks", "information retrieval",
+    "database systems",
     "human-computer interaction",
 ]
 TOPICS   = COMPUTATIONAL_TOPICS + CONCEPTUAL_TOPICS
@@ -64,10 +64,8 @@ QUESTIONS_PER_COMBO = 1
 HIGH_SCORE_COMBOS: dict = {
     ("hash table",               "mcq_single"  ): 2,
     ("hash table linear probing","mcq_single"  ): 2,
-    ("dijkstra shortest path",   "mcq_single"  ): 2,
     ("merge sort",               "mcq_single"  ): 2,
     ("recursion",                "mcq_single"  ): 2,
-    ("binary search tree",       "mcq_single"  ): 2,
     ("quick sort",               "mcq_single"  ): 2,
     ("computer networks",        "open_answer" ): 2,
     ("database systems",         "open_answer" ): 2,

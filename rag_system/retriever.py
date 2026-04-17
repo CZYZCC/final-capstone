@@ -96,6 +96,13 @@ class LogicGraphRetriever:
         # Lower to 0.10 for conceptual so we keep more of the context.
         if question_type == "conceptual" and similarity_threshold == SIMILARITY_THRESHOLD:
             similarity_threshold = 0.10
+        # ★ FIX-MAXRESULTS: computational topics benefit from more graph context.
+        # Data shows SmartQG loses mcq_single/computational to unpruned_graph_rag
+        # because unpruned has threshold=-1.0 (keeps all nodes). Increasing
+        # max_results from 10→15 for computational closes this gap without
+        # sacrificing precision (we still apply cosine threshold).
+        if question_type == "computational" and max_results == 10:
+            max_results = 15
         seeds    = self.vector_retriever.retrieve(topic, top_k=5)
         seed_ids = [s['node_id'] for s in seeds]
         self.kg.logger.log(

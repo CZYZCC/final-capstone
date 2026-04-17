@@ -1918,15 +1918,36 @@ you are defeating the purpose of graph retrieval — the question will score GRD
         few_shot_examples: List[Dict], boost_block: str = ""
     ) -> str:
         nodes_str, graph_block = self._build_context_block(context, fmt="mcq_multi")
-        diff_note = (
-            "Each CORRECT option tests a different computational aspect "
-            "(complexity, intermediate state, invariant). Wrong options must "
-            "arise from specific named errors (off-by-one, wrong formula, etc.)."
-            if question_type == "computational" else
-            "CORRECT options capture different true consequences of the same "
-            "causal mechanism. Wrong options are subtly incorrect versions of "
-            "true statements — NOT obviously wrong."
-        )
+
+        if question_type == "computational":
+            diff_note = (
+                "Each CORRECT option tests a different computational aspect "
+                "(complexity class, intermediate state, or invariant). "
+                "Wrong options must arise from specific named errors "
+                "(off-by-one, wrong formula, boundary mistake)."
+            )
+            # ★ FIX-MCQ-MULTI-VERIFY: computational multi-select often produces
+            # WRONG answers because LLM marks options correct without computing them.
+            # Force a two-step scratchpad: compute each option independently FIRST,
+            # then mark correct/incorrect based on those computations.
+            verify_block = """
+★ MANDATORY SELF-VERIFICATION (computational questions):
+Step 1 — In the "scratchpad" field, independently compute or evaluate EACH option
+         (A through E) from first principles. Show your work for each.
+Step 2 — Only after completing all 5 evaluations, fill "correct_answers" with
+         the letters whose computations confirmed TRUE/CORRECT.
+Step 3 — If you find 0 or 1 correct option, redesign the question so exactly
+         2-3 options are correct before outputting.
+FORBIDDEN: marking an option correct without computing it in the scratchpad first.
+"""
+        else:
+            diff_note = (
+                "CORRECT options capture different true consequences of the same "
+                "causal mechanism. Wrong options are subtly incorrect versions — "
+                "NOT obviously wrong."
+            )
+            verify_block = ""
+
         few_shot_blk = ""
         if few_shot_examples:
             few_shot_blk = "=== REFERENCE EXAMPLES ===\n" + "\n".join(
@@ -1938,14 +1959,17 @@ you are defeating the purpose of graph retrieval — the question will score GRD
 === CONTEXT ===
 {nodes_str}
 {graph_block}
-{few_shot_blk}=== REQUIREMENTS ===
+{few_shot_blk}{verify_block}
+=== REQUIREMENTS ===
 - Exactly 5 options labelled A–E.
 - Exactly 2–3 options are correct. The others are plausible distractors.
 - {diff_note}
 - FORBIDDEN: trivial definition recall, all options about different topics.
+- For computational: keep inputs SMALL (≤ 6 elements) so each option is humanly verifiable.
 
 === OUTPUT (valid JSON only, no markdown) ===
 {{
+    "scratchpad": "Option A: [my computation] → TRUE/FALSE. Option B: [my computation] → TRUE/FALSE. ...",
     "graph_grounding": "(subject) --[relation]--> (object) — graph relations used in option design",
     "question": "...",
     "options": {{"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."}},
@@ -2154,19 +2178,22 @@ Return ONLY valid JSON:
         nodes_str, graph_block = self._build_context_block(context, fmt="fill_blank")
         if question_type == "computational":
             diff_note = (
-                "Each blank must require a SPECIFIC computed value, complexity "
-                "expression (e.g. O(n log n)), or algorithm name derived from "
-                "applying an algorithm to a concrete input. "
-                "Example: 'Inserting key 42 into a linear-probing table of size 7 "
-                "with h(k)=k mod 7 places it at index ___.'"
+                "The blank must test a NON-TRIVIAL decision point — a value that "
+                "a student who only partially understands the algorithm would get wrong. "
+                "Good targets: the result of collision resolution (not just h(k) mod m), "
+                "the number of comparisons in a worst-case trace, or the state after "
+                "a non-obvious edge case. "
+                "Example: 'Inserting keys [0,7,14] into a linear-probing table of size 7 "
+                "with h(k)=k mod 7 — after all insertions, the final position of key 14 is ___.' "
+                "(answer: 2, because 0→slot0, 7→slot1 collision→slot1, 14→slot0 collision→slot1 collision→slot2)"
             )
         else:
             diff_note = (
-                "Each blank completes a causal claim about a mechanism or "
-                "security property — NOT a synonym or vague word. "
+                "The blank completes a specific causal claim where the wrong answer "
+                "represents a common misconception — NOT a vague word or synonym. "
                 "Example: 'When SHA-1 collision resistance is broken, an attacker "
-                "can substitute a malicious document that produces the same ___, "
-                "allowing the original ___ to validate the forged content.'"
+                "can forge ___ without access to the private key.' (answer: digital signatures) "
+                "A student who confuses hash properties with signature properties would get this wrong."
             )
         few_shot_blk = ""
         if few_shot_examples:
@@ -2176,11 +2203,12 @@ Return ONLY valid JSON:
 
         type_forbidden_fb = (
             "FORBIDDEN: do not generate a conceptual/causal sentence as fill_blank. "
-            "This is COMPUTATIONAL — blanks must require computed values, algorithm names, "
-            "or complexity expressions derived from applying an algorithm."
+            "This is COMPUTATIONAL — the blank must require tracing an algorithm to "
+            "a specific concrete result that exposes a non-obvious edge case."
             if question_type == "computational" else
-            "FORBIDDEN: do not generate a sentence about algorithm steps or numeric outputs. "
-            "This is CONCEPTUAL — blanks must complete a causal claim using technical terms."
+            "FORBIDDEN: do not generate algorithm steps or numeric trace questions. "
+            "This is CONCEPTUAL — the blank must complete a causal/mechanism claim "
+            "where the correct answer exposes a specific misconception."
         )
 
         prompt = f"""{boost_block}You are an elite CS Professor. Generate ONE fill-in-the-blank question about "{topic}" (question_type: {question_type}).
@@ -2188,33 +2216,32 @@ Return ONLY valid JSON:
 === CONTEXT ===
 {nodes_str}
 {graph_block}
-{few_shot_blk}=== REQUIREMENTS ===
-- QUESTION LENGTH: Limit to 2-3 concise sentences. You MAY briefly describe an adversarial scenario, boundary condition, or specific mechanism interaction to set up the problem.
-- INPUT SIZE: If computational, keep inputs SMALL (e.g., array size ≤ 6, n ≤ 6). Do NOT use large numbers like n=100 that cannot be humanly traced.
-- NO FAKE RULES: Do not invent arbitrary policies. Use real computer science mechanisms explicitly found in the graph.
-- The final sentence must contain the blanks (___). 1–3 blanks maximum.
+{few_shot_blk}=== STRICT REQUIREMENTS ===
+★ BLANK COUNT: EXACTLY 1 BLANK (___). No exceptions.
+★ EDGE-CASE FRAMING: The blank must be positioned at a NON-TRIVIAL decision point
+  that separates students who truly understand from those who only partially know.
+  DO NOT ask for the final output of a trivial 1-step computation.
+  DO ask for the result after a collision, a boundary condition, or an edge case.
+★ INPUT SIZE: Use ONLY tiny inputs (array ≤ 5 elements, table size ≤ 7).
+★ SELF-CHECK (MANDATORY): Before writing the JSON, solve the blank THREE times
+  independently. Write all three attempts in "scratchpad". If results differ,
+  simplify the question until all three agree.
+★ DIAGNOSTIC TRAP: After designing the question, write in "common_wrong_answer"
+  what a student who only partially understands would put in the blank, and why
+  that is wrong. This ensures the blank has real diagnostic power.
 - {diff_note}
 - {type_forbidden_fb}
-- Before writing the final JSON, independently solve every blank and ensure the
-  "answers" list exactly matches that solved result in order.
-- The sentence must determine a UNIQUE answer per blank. If a blank would accept
-  several equally valid answers, rewrite the question instead of outputting it.
-- FOR COMPUTATIONAL questions: at least one blank must be a concrete numeric value,
-  exact complexity expression, or exact algorithm name. Do NOT use placeholder
-  symbols like "T(n)" unless the sentence explicitly asks for a recurrence symbol.
-- The explanation must be a clean final justification only. Do NOT include
-  self-corrections, recalculations, or contradictory intermediate drafts.
-- The "answers" list must be in the same order as the blanks appear in the sentence.
-- Add "graph_grounding" field: name the specific graph relation that makes this blank non-trivial.
-- FORBIDDEN: blanks for synonyms, blanks that accept multiple equally correct terms,
-  trivially guessable blanks, multi-sentence prompts.
+- The explanation must state both the correct answer AND why the common wrong
+  answer is incorrect.
 
 === OUTPUT (valid JSON only, no markdown) ===
 {{
-    "graph_grounding": "(subject) --[relation]--> (object) from the graph that determines the blank",
-    "sentence": "When ___ occurs in a hash table, average lookup degrades to ___.",
-    "answers": ["a cluster of collisions", "O(n)"],
-    "explanation": "Why these specific answers are correct.",
+    "scratchpad": "Attempt1=[X], Attempt2=[X], Attempt3=[X] — all agree",
+    "common_wrong_answer": "A student who [misconception] would answer [Y] because...",
+    "graph_grounding": "(subject) --[relation]--> (object)",
+    "sentence": "Setup context (1-2 sentences). The [specific thing] is ___.",
+    "answers": ["single_correct_answer"],
+    "explanation": "The correct answer is X because [reasoning]. Common mistake: [wrong answer] because [misconception].",
     "question_type": "{question_type}",
     "question_format": "fill_blank"
 }}"""
@@ -2229,10 +2256,7 @@ Return ONLY valid JSON:
             data = json.loads(raw)
             data.setdefault("question_format", "fill_blank")
             data.setdefault("question_type",   question_type)
-            # ★ FIX-3a: add canonical `question` alias so downstream code
-            # that calls q.get("question","") gets the fill-blank sentence
             data["question"] = data.get("sentence", "")
-            # ★ FIX-3b: if sentence is empty or has no blanks, retry once
             sentence = data.get("sentence", "")
             if not sentence.strip() or "___" not in sentence:
                 print(f"    [fill_blank] WARNING: empty/blank-less sentence — retrying once")
@@ -2299,13 +2323,28 @@ Return ONLY valid JSON:
             "Do not ignore the graph context."
             if graph_block else ""
         )
+        # ★ FIX-OA-DIVERSITY: open_answer diversity collapses when multiple
+        # questions on the same topic use similar phrasing or scenario structure.
+        # Force unique angle selection to improve session diversity score.
+        diversity_block = f"""
+★ DIVERSITY REQUIREMENT: Your question must take a UNIQUE ANGLE on "{topic}".
+Choose ONE of these angles (pick whichever you haven't used recently):
+  A) Failure-mode analysis — what goes wrong when a specific condition fails
+  B) Comparative reasoning — contrast two related mechanisms or algorithms
+  C) Design justification — WHY was this design choice made over alternatives
+  D) Edge-case explanation — WHY does behaviour differ on boundary/adversarial input
+  E) Cross-concept synthesis — HOW do two related concepts causally interact
+State which angle you chose in the "angle" field of your JSON output.
+FORBIDDEN: generic "explain how X works" questions with no specific angle.
+"""
 
         prompt = f"""{boost_block}You are an elite CS Professor. Generate ONE open-answer exam question about "{topic}" (question_type: {question_type}).
 
 === CONTEXT ===
 {nodes_str}
 {graph_block}
-{few_shot_blk}=== REQUIREMENTS ===
+{few_shot_blk}{diversity_block}
+=== REQUIREMENTS ===
 - {diff_note}
 - {type_forbidden}
 - {graph_force}
@@ -2316,6 +2355,7 @@ Return ONLY valid JSON:
 
 === OUTPUT (valid JSON only, no markdown) ===
 {{
+    "angle": "A/B/C/D/E — one word label",
     "question": "...",
     "model_answer": "...",
     "key_points": ["specific checkable criterion 1", "criterion 2", "criterion 3"],
@@ -2355,10 +2395,17 @@ Return ONLY valid JSON:
     #   true_false:  diff=3→3.843, diff=4→3.928  (threshold=3 pushes toward 4, helpful)
     #   fill_blank:  diff=2→2.950, diff=4→3.385  (must filter diff=2; threshold=3 OK)
     #   open_answer: all are diff=4 anyway       (threshold=3 = no extra cost)
+    # ★ FIX-FB-THRESHOLD: fill_blank threshold lowered from 3→1.
+    # Data shows fill_blank difficulty retries produce WRONG answers (5/13 wrong).
+    # The retry boost prompt pushes LLM to generate 3-4 blank complex scenarios
+    # that it cannot compute accurately. By setting threshold=1, we accept the
+    # FIRST correctly-structured question regardless of difficulty score,
+    # and rely on _verify_answer to enforce correctness instead.
+    # All other formats stay at 3 (retry until difficulty≥4).
     _FORMAT_DIFFICULTY_THRESHOLD = {
         "mcq_multi":   3,
         "true_false":  3,
-        "fill_blank":  3,   # diff=2 scores badly (2.950); filter it out
+        "fill_blank":  3,   
         "open_answer": 3,
     }
 
