@@ -49,13 +49,13 @@ class Pipeline:
             self.logger.log(f"\n{'='*60}\n>>> Topic: {topic}\n{'='*60}")
 
             # Group A: NO_RETRIEVAL
-            nr_json, _       = self.no_ret_gen.generate(topic, qb_retriever)  # <--- 修改这里：传入 qb_retriever
+            nr_json, _       = self.no_ret_gen.generate(topic, qb_retriever)
             nr_score         = self.evaluator.evaluate(nr_json, [], topic)
             self._log_and_save("NO_RETRIEVAL", topic, nr_json, nr_score, [], "no_retrieval")
 
             # Group B: VECTOR_RAG
             v_ctx            = vec_retriever.retrieve(topic)
-            v_json, _        = self.vector_rag_gen.generate(topic, v_ctx, qb_retriever)  # <--- 修改这里：传入 qb_retriever
+            v_json, _        = self.vector_rag_gen.generate(topic, v_ctx, qb_retriever)
             v_score          = self.evaluator.evaluate(v_json, v_ctx, topic)
             self._log_and_save("VECTOR_RAG", topic, v_json, v_score, v_ctx, "vector_rag")
 

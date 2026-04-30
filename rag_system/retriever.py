@@ -106,7 +106,7 @@ class LogicGraphRetriever:
         seeds    = self.vector_retriever.retrieve(topic, top_k=5)
         seed_ids = [s['node_id'] for s in seeds]
         self.kg.logger.log(
-            f"   [Hybrid-GraphRAG] 以 {len(seed_ids)} 个向量节点为起点逻辑扩散..."
+            f"   [Hybrid-GraphRAG] Expanding from {len(seed_ids)} seed nodes..."
         )
 
         visited_nodes   = set(seed_ids)
@@ -151,8 +151,8 @@ class LogicGraphRetriever:
         # Fallback: if threshold removes everything, keep top-3 regardless
         if not threshold_pairs:
             self.kg.logger.log(
-                f"   [Hybrid-GraphRAG] 阈值 {similarity_threshold} 过滤后无节点，"
-                f"回退保留 top-3"
+                f"   [Hybrid-GraphRAG] No nodes above threshold {similarity_threshold},"
+                f"falling back to top-3"
             )
             threshold_pairs = sorted(
                 zip(valid_nodes, sims.tolist()), key=lambda x: x[1], reverse=True
@@ -172,8 +172,8 @@ class LogicGraphRetriever:
         final_edges = final_edges[:40]
 
         self.kg.logger.log(
-            f"   [Hybrid-GraphRAG] 阈值过滤后保留 {len(ranked)}/{len(valid_nodes)} 个节点，"
-            f"{len(final_edges)} 条关系"
+            f"   [Hybrid-GraphRAG] Retained {len(ranked)}/{len(valid_nodes)} nodes after threshold filtering,"
+            f"{len(final_edges)} relations"
         )
 
         return {
@@ -201,7 +201,7 @@ class QuestionBankRetriever:
         self.index     = None
 
         if not os.path.exists(question_bank_path):
-            print(f"[!] 找不到题库文件 {question_bank_path}，Few-shot 功能将被禁用。")
+            print(f"[!] Question bank not found at {question_bank_path} — few-shot disabled.")
             return
 
         with open(question_bank_path, 'r', encoding='utf-8') as f:
@@ -221,8 +221,8 @@ class QuestionBankRetriever:
                            or q.get('question_type') == 'computational')
             mt_count = sum(1 for q in self.questions if q.get('source') == 'kg_multitype')
             print(
-                f"[*] 题库已加载：{len(self.questions)} 道题"
-                f"（计算 {comp} / 多题型 {mt_count}）"
+                f"[*] Question bank loaded: {len(self.questions)} questions"
+                f"(computational {comp} / multi-type {mt_count})"
             )
 
     @property
@@ -320,23 +320,23 @@ class QuestionBankRetriever:
         ][:top_k]
     
 
-    # ----- 将以下代码添加到 retriever.py 的最下方 -----
+    # ----- Hybrid Retriever appended below -----
 
 # ---------------------------------------------------------------------------
-# 4. Hybrid Retriever (Vector + BM25 + RRF) - 新增 Baseline C
+# 4. Hybrid Retriever (Vector + BM25 + RRF) — Baseline C
 # ---------------------------------------------------------------------------
 
 class HybridRetriever:
     """
-    结合 Dense Vector 和 Sparse BM25 的混合检索器。
-    使用 RRF (Reciprocal Rank Fusion) 算法进行结果重排。
+    Hybrid retriever combining Dense Vector search and Sparse BM25.
+    Results are re-ranked using RRF (Reciprocal Rank Fusion).
     """
     def __init__(self, vector_retriever: VectorBaselineRetriever):
         self.vector_retriever = vector_retriever
         self.kg = vector_retriever.kg
         self.node_ids = vector_retriever.node_ids
         
-        # 构建 BM25 索引 (简单分词：去除标点并按空格切分)
+        # Build BM25 index (simple tokenisation: strip punctuation, split on whitespace)
         corpus = []
         for nid in self.node_ids:
             text = self.kg.nodes[nid].lower()
@@ -345,28 +345,28 @@ class HybridRetriever:
         self.bm25 = BM25Okapi(corpus)
 
     def retrieve(self, query: str, top_k: int = 5, rrf_k: int = 60) -> List[Dict]:
-        # 1. 获取向量召回结果 (召回两倍数量用于重排)
+        # 1. Retrieve vector recall results (2x quantity for re-ranking)
         vec_results = self.vector_retriever.retrieve(query, top_k=top_k * 2)
         
-        # 2. 获取 BM25 召回结果
+        # 2. Retrieve BM25 recall results
         query_tokens = query.lower().translate(str.maketrans('', '', string.punctuation)).split()
         bm25_scores = self.bm25.get_scores(query_tokens)
         bm25_indices = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:top_k * 2]
         
-        # 3. RRF (Reciprocal Rank Fusion) 分数计算
+        # 3. Compute RRF (Reciprocal Rank Fusion) scores
         rrf_scores = {}
         
-        # 处理 Vector 排名
+        # Process vector rankings
         for rank, res in enumerate(vec_results):
             nid = res['node_id']
             rrf_scores[nid] = rrf_scores.get(nid, 0.0) + 1.0 / (rrf_k + rank + 1)
             
-        # 处理 BM25 排名
+        # Process BM25 rankings
         for rank, idx in enumerate(bm25_indices):
             nid = self.node_ids[idx]
             rrf_scores[nid] = rrf_scores.get(nid, 0.0) + 1.0 / (rrf_k + rank + 1)
             
-        # 4. 根据 RRF 分数重排并返回 Top-K
+        # 4. Re-rank by RRF score and return top-K
         sorted_nids = sorted(rrf_scores.keys(), key=lambda x: rrf_scores[x], reverse=True)[:top_k]
         
         return [

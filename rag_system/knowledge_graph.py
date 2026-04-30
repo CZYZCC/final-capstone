@@ -81,7 +81,7 @@ class AdvancedKnowledgeGraph:
                     # structural edges have no meaningful entity labels
                     self.add_edge(f"tb{i}_node{j-1}", node_id, "structural")
                 total_nodes += 1
-        self.logger.log(f"   >>> 已加载 {total_nodes} 个基础知识切片。")
+        self.logger.log(f"   >>> Loaded {total_nodes} base knowledge slices.")
 
     def load_triplets(self, triplets_path: str):
         """Load LLM-extracted triplets and create logic edges.
@@ -90,13 +90,13 @@ class AdvancedKnowledgeGraph:
         logic edge, so retrieve_subgraph can expose them to the generator.
         """
         if not os.path.exists(triplets_path):
-            self.logger.log(f"   [Error] 找不到图谱文件: {triplets_path}")
+            self.logger.log(f"   [Error] Knowledge graph file not found: {triplets_path}")
             return
 
         with open(triplets_path, 'r', encoding='utf-8') as f:
             data     = json.load(f)
             triplets = data.get('triplets', [])
-        self.logger.log(f"   >>> 正在加载 {len(triplets)} 条逻辑边...")
+        self.logger.log(f"   >>> Loading {len(triplets)} logic edges...")
 
         valid_triplets = []
         for t in triplets:
@@ -130,4 +130,4 @@ class AdvancedKnowledgeGraph:
             if edge_count > 300_000:
                 break
 
-        self.logger.log(f"   >>> 构建了 {edge_count} 条逻辑关联路径。")
+        self.logger.log(f"   >>> Built {edge_count} logic association paths.")

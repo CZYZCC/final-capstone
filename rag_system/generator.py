@@ -113,13 +113,13 @@ specific technical nuance (or vice versa).
 Return JSON: {{"statement":"...","tf_answer":false,"explanation":"...","question_type":"conceptual","question_format":"true_false"}}""",
 
     ("fill_blank", "computational"): """\
-Generate ONE fill-in-the-blank sentence with 1–3 blanks (___).
+Generate ONE fill-in-the-blank sentence with 1–2 blanks (___).
 Each blank must require a specific computed value, complexity expression,
 or algorithm name. Answers list must match blank order.
 Return JSON: {{"sentence":"The ___ algorithm has worst-case complexity ___.","answers":["merge sort","O(n log n)"],"explanation":"...","question_type":"computational","question_format":"fill_blank"}}""",
 
     ("fill_blank", "conceptual"): """\
-Generate ONE fill-in-the-blank sentence with 1–3 blanks (___).
+Generate ONE fill-in-the-blank sentence with 1–2 blanks (___).
 Each blank must complete a causal claim with a specific technical term —
 not a vague word. Answers list must match blank order.
 Return JSON: {{"sentence":"When ___ is broken, an attacker can forge ___.","answers":["collision resistance","digital signatures"],"explanation":"...","question_type":"conceptual","question_format":"fill_blank"}}""",
@@ -531,11 +531,11 @@ _CONCEPTUAL_TOPICS = {
 
 
 def _choose_question_type(topic: str, qb_retriever=None) -> str:
-    # 新增逻辑：如果传入了题库检索器，按题库真实比例动态采样
+    # If a question-bank retriever is provided, sample question_type proportionally from the bank
     if qb_retriever is not None and qb_retriever.available:
         topic_norm = topic.lower().strip()
         
-        # 统计 question bank 中该 topic 下的两种题型数量
+        # Count how many computational vs conceptual questions exist for this topic in the bank
         conceptual_count = sum(
             1 for q in qb_retriever.questions
             if q.get("topic", "").lower().strip() == topic_norm
@@ -550,14 +550,14 @@ def _choose_question_type(topic: str, qb_retriever=None) -> str:
         total = conceptual_count + computational_count
         if total > 0:
             import random
-            # random.choices 会自动根据 weights 计算 a/(a+b) 和 b/(a+b) 的概率并随机抽取
+            # random.choices samples proportionally based on the weights
             return random.choices(
                 population=["conceptual", "computational"],
                 weights=[conceptual_count, computational_count],
                 k=1
             )[0]
 
-    # 默认/边缘情况：如果题库没准备好或该 topic 暂时没有题，回退到原有的硬编码逻辑
+    # Fallback: question bank unavailable or no entries for this topic — use hard-coded rules
     t = topic.lower().strip()
     if any(ct in t for ct in _COMPUTATIONAL_TOPICS):
         return "computational"
@@ -979,7 +979,7 @@ class NoRetrievalGenerator:
     def __init__(self, api_key: str, base_url: str = "https://api.deepseek.com"):
         self.llm = OpenAI(api_key=api_key, base_url=base_url)
 
-    # 原来: def generate(self, topic: str) -> Tuple[str, str]:
+    # Original signature: def generate(self, topic: str) -> Tuple[str, str]:
     def generate(self, topic: str, qb_retriever=None,
                  question_format: str = "mcq_single") -> Tuple[str, str]:
         question_type = _choose_question_type(topic, qb_retriever)
@@ -1177,7 +1177,9 @@ class SmartGenerator:
         graph_context: Dict,
         qb_retriever,
         question_format: str = "mcq_single",
-           naive_mode: bool = False,   # NEW: controls which format to generate
+        naive_mode: bool = False,
+        no_self_correction: bool = False,
+        progress_callback = None,   # SSE: callable({"stage":..., ...}) for real-time events
     ) -> Tuple[str, str]:
 
         question_type  = _choose_question_type(topic, qb_retriever)
@@ -1210,12 +1212,25 @@ class SmartGenerator:
             }
             gen_fn = dispatch[question_format]
             raw    = gen_fn(topic, question_type, graph_context, few_shot_examples)
+
+            # ABLATION C3: skip Self-Correction, return first attempt directly
+            if no_self_correction:
+                try:
+                    q_data = json.loads(raw)
+                    q_data["difficulty_score"]     = -1   # sentinel: correction was skipped
+                    q_data["difficulty_reasoning"] = "Self-Correction disabled (ablation_no_correction)"
+                    raw = json.dumps(q_data, ensure_ascii=False)
+                except Exception:
+                    pass
+                return raw, "no_correction_generated"
+
             return self._apply_difficulty_filter_non_mcq(
                 raw, "generated", topic, graph_context,
-                question_type, question_format, qb_retriever
+                question_type, question_format, qb_retriever,
+                progress_callback=progress_callback
             )
 
-        question_type  = _choose_question_type(topic, qb_retriever) # 修改这里，加入 qb_retriever
+        question_type  = _choose_question_type(topic, qb_retriever)
         vary_threshold = (
             self.VARY_THRESHOLD_COMP if question_type == "computational"
             else self.VARY_THRESHOLD_CONC
@@ -1232,12 +1247,18 @@ class SmartGenerator:
             if best_q is not None:
                 if best_sim >= self.REUSE_THRESHOLD:
                     raw = self._wrap_original(best_q, graph_context, question_type)
+                    if no_self_correction:
+                        return self._tag_no_correction(raw, "no_correction_reused")
                     return self._apply_difficulty_filter(raw, "reused", topic, graph_context,
-                                                         question_type, qb_retriever)
+                                                         question_type, qb_retriever,
+                                                         progress_callback=progress_callback)
                 if best_sim >= vary_threshold:
                     raw = self._vary(best_q, graph_context, question_type)
+                    if no_self_correction:
+                        return self._tag_no_correction(raw, "no_correction_varied")
                     return self._apply_difficulty_filter(raw, "varied", topic, graph_context,
-                                                         question_type, qb_retriever)
+                                                         question_type, qb_retriever,
+                                                         progress_callback=progress_callback)
 
         few_shot_examples = []
         if qb_retriever is not None and qb_retriever.available:
@@ -1248,11 +1269,37 @@ class SmartGenerator:
             )
 
         if question_type == "computational":
-            raw = self._generate_fresh(topic, graph_context, few_shot_examples, naive_mode=naive_mode) # 传递参数
+            raw = self._generate_fresh(topic, graph_context, few_shot_examples, naive_mode=naive_mode)
         else:
-            raw = self._generate_conceptual(topic, graph_context, few_shot_examples, naive_mode=naive_mode) # 传递参数
+            raw = self._generate_conceptual(topic, graph_context, few_shot_examples, naive_mode=naive_mode)
+
+        # ABLATION C3: skip Self-Correction, return first attempt directly
+        if no_self_correction:
+            return self._tag_no_correction(raw, "no_correction_generated")
+
         return self._apply_difficulty_filter(raw, "generated" if not naive_mode else "naive_generated", topic, graph_context,
-                                              question_type, qb_retriever)
+                                              question_type, qb_retriever,
+                                              progress_callback=progress_callback)
+
+    # ------------------------------------------------------------------
+    # ABLATION C3 helper: stamp sentinel fields without running correction
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _tag_no_correction(raw_json: str, method: str) -> Tuple[str, str]:
+        """
+        Used when no_self_correction=True.
+        Injects sentinel difficulty fields so downstream evaluation code
+        never sees missing keys, without triggering any LLM retry calls.
+        """
+        try:
+            q_data = json.loads(raw_json)
+            q_data.setdefault("difficulty_score",     -1)
+            q_data.setdefault("difficulty_reasoning", "Self-Correction disabled (ablation_no_correction)")
+            raw_json = json.dumps(q_data, ensure_ascii=False)
+        except Exception:
+            pass
+        return raw_json, method
 
     # ------------------------------------------------------------------
     # Difficulty-filter dispatcher for SmartGenerator (GRAPH_RAG)
@@ -1266,6 +1313,7 @@ class SmartGenerator:
         graph_context: Dict,
         question_type: str,
         qb_retriever,
+        progress_callback = None,
     ) -> Tuple[str, str]:
         """
         Evaluate the generated question's difficulty score (1-5).
@@ -1274,6 +1322,11 @@ class SmartGenerator:
 
         Returns (question_json, method_string).
         """
+        def _emit(evt):
+            if progress_callback:
+                try: progress_callback(evt)
+                except Exception: pass
+
         candidate_json = initial_json
         final_method   = initial_method
         best_json      = ""
@@ -1293,6 +1346,11 @@ class SmartGenerator:
             best_json      = candidate_json
             best_reasoning = last_reasoning
 
+        if last_score <= DIFFICULTY_THRESHOLD:
+            _emit({"stage": "correction_fail", "attempt": 1, "score": last_score})
+        else:
+            _emit({"stage": "correction_pass", "score": last_score})
+
         for attempt in range(2, MAX_DIFFICULTY_RETRIES + 1):
             if last_score > DIFFICULTY_THRESHOLD:
                 break
@@ -1302,6 +1360,7 @@ class SmartGenerator:
                 f"  → Score {last_score}/5 ≤ threshold {DIFFICULTY_THRESHOLD}/5. "
                 f"Regenerating with difficulty boost (attempt {attempt}) …"
             )
+            _emit({"stage": "generation_retry", "attempt": attempt})
 
             few_shot_examples = []
             if qb_retriever is not None and qb_retriever.available:
@@ -1312,11 +1371,10 @@ class SmartGenerator:
             if question_type == "computational":
                 candidate_json = self._generate_fresh(topic, graph_context, few_shot_examples,
                                                        boost_block=boost_block)
-                final_method   = "generated_difficulty_retry"
             else:
                 candidate_json = self._generate_conceptual(topic, graph_context, few_shot_examples,
                                                             boost_block=boost_block)
-                final_method   = "generated_difficulty_retry"
+            final_method = f"generated_difficulty_retry_x{attempt - 1}"
 
             last_score, last_reasoning = assess_difficulty(self.llm, candidate_json)
             print(
@@ -1328,12 +1386,18 @@ class SmartGenerator:
                 best_score     = last_score
                 best_json      = candidate_json
                 best_reasoning = last_reasoning
+
+            if last_score <= DIFFICULTY_THRESHOLD:
+                _emit({"stage": "correction_fail", "attempt": attempt, "score": last_score})
+            else:
+                _emit({"stage": "correction_pass", "score": last_score})
         else:
             if last_score <= DIFFICULTY_THRESHOLD:
                 print(
                     f"[DIFFICULTY FILTER | GRAPH_RAG] All {MAX_DIFFICULTY_RETRIES} attempts scored "
                     f"≤ {DIFFICULTY_THRESHOLD}/5. Accepting best seen (score={best_score})."
                 )
+                _emit({"stage": "correction_pass", "score": best_score})  # accept best
 
         final_json      = best_json if best_json else candidate_json
         final_score     = best_score if best_json else last_score
@@ -1662,7 +1726,7 @@ If graph relations are provided, use them to create a cross-concept question req
     def _generate_fresh(self, topic: str, context: Dict, few_shot_examples: List[Dict],
                         boost_block: str = "", naive_mode: bool = False) -> str:
         for _ in range(3):
-            # 注意这里：内部调用 _do_generate_fresh 时也要传进去
+            # Pass naive_mode through to the inner _do_generate_fresh call
             raw = self._do_generate_fresh(topic, context, few_shot_examples, boost_block, naive_mode=naive_mode)
             if self._verify_answer(raw):
                 return raw
@@ -1688,7 +1752,7 @@ If graph relations are provided, use them to create a cross-concept question req
                 for e in relations[:15]
             )
             if naive_mode:
-                # Naive 模式：只给关系，不给强制使用指令
+                # Naive mode: provide relations without mandatory usage instructions
                 graph_block = f"\n=== RETRIEVED KNOWLEDGE GRAPH RELATIONS ===\n{rel_lines}\n"
             else:
                 graph_block = f"""
@@ -1779,7 +1843,7 @@ Complete "generator_scratchpad" FIRST, then fill "mcq_data".
 
     def _generate_conceptual(
         self, topic: str, context: Dict, few_shot_examples: List[Dict],
-        boost_block: str = "", naive_mode: bool = False  # <--- 加上参数
+        boost_block: str = "", naive_mode: bool = False
     ) -> str:
         nodes_str = "\n".join(
             [f"[{i+1}] {_sanitize(n['content'])[:400]}" for i, n in enumerate(context.get("nodes", []))]
@@ -2011,15 +2075,29 @@ FORBIDDEN: marking an option correct without computing it in the scratchpad firs
         """
         nodes_str, graph_block = self._build_context_block(context, fmt="true_false")
 
+        # ★ FIX-TF-PROMPT: Original type_note guided LLM toward the most
+        # straightforward KG node relationship, producing factually correct but
+        # pedagogically weak statements (diagnostic_power ≈ 1.5 on cybersecurity,
+        # information retrieval). Rewritten to explicitly prefer counterintuitive
+        # or cross-concept causal facts that trip up students — the kind Unpruned
+        # GraphRAG generates naturally from its fuller context window.
         type_note = (
-            "The fact must be a SPECIFIC COMPUTED VALUE — an exact number, "
-            "complexity class, or algorithm output derived from a concrete input. "
-            "Example: 'f(5) with Fibonacci recurrence requires T(5) recursive calls "
-            "where T(n)=T(n-1)+T(n-2)+1, T(0)=T(1)=1 → T(5)=15'"
+            "PRIORITY: pick a fact that CONTRADICTS a common student assumption "
+            "about this algorithm — a boundary case, an off-by-one result, or a "
+            "worst-case behaviour students consistently mis-estimate. "
+            "Example: 'Build-Max-Heap on n=9 calls Max-Heapify exactly floor(9/2)=4 "
+            "times on non-leaf nodes, NOT 9 times as most students assume.' "
+            "If no such misconception exists in the context, fall back to a specific "
+            "computed value requiring ≥3 non-trivial steps to derive."
             if question_type == "computational" else
-            "The fact must be a SPECIFIC CAUSAL CLAIM — how one mechanism determines "
-            "another's behaviour. Example: 'SHA-1 collision resistance being broken "
-            "allows signature forgery because signatures verify the hash, not the message'"
+            "PRIORITY: find a CROSS-CONCEPT CAUSAL CHAIN where mechanism A failing "
+            "or holding produces an unexpected effect on mechanism B — especially one "
+            "where the causal direction is counterintuitive. "
+            "Example: 'A stateful firewall permitting partial TCP handshakes can be "
+            "exploited for SYN-flood because it exhausts the state table before the "
+            "filtering rule fires.' "
+            "If no cross-concept chain exists, fall back to a single-concept edge "
+            "case where the standard defence/property fails under specific conditions."
         )
         few_shot_blk = ""
         if few_shot_examples:
@@ -2027,27 +2105,33 @@ FORBIDDEN: marking an option correct without computing it in the scratchpad firs
                 f"Ex {i+1}: {json.dumps(ex)}" for i, ex in enumerate(few_shot_examples[:2])
             ) + "\n\n"
 
-        # ── Step 1: Compute a verifiable fact ────────────────────────────
+        # ── Step 1: Find a counterintuitive fact ─────────────────────────
         step1_prompt = f"""You are an elite CS Professor. Topic: "{topic}" (question_type: {question_type})
 
 === CONTEXT ===
 {nodes_str}
 {graph_block}
 {few_shot_blk}
-Your task: Compute ONE specific, verifiable fact about "{topic}".
+Your task: Find ONE fact about "{topic}" that is COUNTERINTUITIVE or commonly misunderstood.
 {type_note}
+
+SELECTION PRIORITY (choose the highest tier available from the context):
+  Tier 1 — Cross-concept: mechanism A unexpectedly determines behaviour of mechanism B
+  Tier 2 — Boundary/edge-case: a value that differs from the "obvious" estimate
+  Tier 3 — Multi-step computation: requires ≥3 distinct reasoning steps
 
 Requirements:
 - Show your work step by step
-- Arrive at an EXACT, UNAMBIGUOUS answer (a number, expression, or "True/False claim")
-- The fact must be non-trivial but verifiable
+- Arrive at an EXACT, UNAMBIGUOUS answer (a number, expression, or causal claim)
+- Name the MISCONCEPTION the fact contradicts (even if tier 3)
 
 Return ONLY valid JSON:
 {{
-    "fact_statement": "A precise claim that is verifiably TRUE (e.g., 'f(5)=15 recursive calls')",
-    "computation": "Your step-by-step work showing why this fact is true",
+    "fact_statement": "A precise claim that is verifiably TRUE but non-obvious",
+    "computation": "Your step-by-step reasoning showing why this fact is true",
     "exact_answer": "The specific value/result that makes the fact true",
-    "graph_grounding": "(subject) --[relation]--> (object) if graph was used, else empty"
+    "graph_grounding": "(subject) --[relation]--> (object) if graph was used, else empty",
+    "misconception": "The common wrong belief this fact contradicts (1 sentence)"
 }}"""
 
         try:
@@ -2094,33 +2178,38 @@ Return ONLY valid JSON:
                          "question_type": question_type, "error": str(inner_e)}
                 return json.dumps(empty, ensure_ascii=False)
 
-        fact     = step1.get("fact_statement", "")
-        workings = step1.get("computation", "")
-        gg       = step1.get("graph_grounding", "")
+        fact         = step1.get("fact_statement", "")
+        workings     = step1.get("computation", "")
+        gg           = step1.get("graph_grounding", "")
+        misconception = step1.get("misconception", "")
 
         # ── Step 2: Build the T/F question from the verified fact ────────
         # With probability ~0.5, generate a TRUE statement (using exact_answer)
         # With probability ~0.5, generate a FALSE statement (using a wrong value)
+        misconception_block = (
+            f"\n=== COMMON MISCONCEPTION TO EXPLOIT ===\n{misconception}\n"
+            if misconception else ""
+        )
         step2_prompt = f"""{boost_block}You are an elite CS Professor. Topic: "{topic}" (question_type: {question_type})
 
 === VERIFIED FACT ===
 {fact}
 Computation: {workings}
-
+{misconception_block}
 === TASK ===
 Using the verified fact above, create ONE True/False exam question.
 CHOOSE ONE of these two strategies (pick the harder/more interesting one):
 
   STRATEGY A — True statement (use the exact correct value):
     Write the fact as a statement. tf_answer = true.
-    Make it a trap by phrasing it in a way that LOOKS false to a student
-    who hasn't done the computation.
+    Make it a TRAP by phrasing it in a way that LOOKS false to a student
+    who hasn't done the computation — ideally exploiting the misconception above.
 
   STRATEGY B — False statement (change ONE key value to a wrong value):
     Slightly alter the fact (wrong number, wrong complexity, wrong direction).
     tf_answer = false.
-    The wrong value must be plausible — a value a student might compute
-    if they make a specific, identifiable error.
+    The wrong value must match the misconception — the exact mistake a student
+    would make if they held the wrong belief described above.
 
 {type_note}
 FORBIDDEN: vague generalisations, definitional statements ("X is an asymmetric algorithm"),
@@ -2136,6 +2225,20 @@ Return ONLY valid JSON:
     "question_format": "true_false"
 }}"""
 
+        # ── Single-step fallback prompt (reused across empty-statement rescues) ──
+        _single_step_tf_prompt = (
+            f'You are an elite CS Professor. Topic: "{topic}" (type: {question_type})\n\n'
+            f'=== CONTEXT ===\n{nodes_str}\n{graph_block}\n'
+            f'Generate ONE challenging True/False exam question that exploits a '
+            f'COMMON MISCONCEPTION or COUNTERINTUITIVE CAUSAL RELATIONSHIP about '
+            f'"{topic}". Do NOT write a plain definitional statement.\n'
+            f'FORBIDDEN: vague generalisations, obvious facts.\n\n'
+            f'Return ONLY valid JSON:\n'
+            f'{{"graph_grounding":"","statement":"...","tf_answer":true,'
+            f'"explanation":"Step-by-step proof showing why the statement is true/false.",'
+            f'"question_type":"{question_type}","question_format":"true_false"}}'
+        )
+
         try:
             r2 = self.llm.chat.completions.create(
                 model="deepseek-chat",
@@ -2149,26 +2252,72 @@ Return ONLY valid JSON:
             data.setdefault("question_type",   question_type)
             # ★ FIX-2a: add canonical `question` alias
             data["question"] = data.get("statement", "")
-            # ★ FIX-2b: if statement is still empty (LLM produced blank output),
-            # retry step2 once with a simpler directive before giving up
+
+            # ★ FIX-2b: step2 produced empty statement → retry once at higher temp
             if not data.get("statement", "").strip():
                 print(f"    [true_false] WARNING: step2 produced empty statement — retrying once")
                 r2b = self.llm.chat.completions.create(
                     model="deepseek-chat",
                     messages=[{"role": "user", "content": step2_prompt}],
                     response_format={"type": "json_object"},
-                    temperature=0.9,   # higher temp for diversity on retry
+                    temperature=0.9,
                     max_tokens=800,
                 )
                 data = json.loads(r2b.choices[0].message.content)
                 data.setdefault("question_format", "true_false")
                 data.setdefault("question_type",   question_type)
                 data["question"] = data.get("statement", "")
+
+            # ★ FIX-1 (NEW): retry also empty → abandon two-step, use single-step fallback.
+            # Root cause of the two catastrophic 1.4-score questions (binary search,
+            # recursion): step2_prompt returned valid JSON but with a blank "statement"
+            # field. The previous code returned that empty result directly.
+            if not data.get("statement", "").strip():
+                print(f"    [true_false] WARNING: step2 retry also empty — single-step fallback")
+                try:
+                    rs = self.llm.chat.completions.create(
+                        model="deepseek-chat",
+                        messages=[{"role": "user", "content": _single_step_tf_prompt}],
+                        response_format={"type": "json_object"},
+                        temperature=0.7,
+                        max_tokens=700,
+                    )
+                    sd = json.loads(rs.choices[0].message.content)
+                    sd.setdefault("question_format", "true_false")
+                    sd.setdefault("question_type",   question_type)
+                    sd["question"] = sd.get("statement", "")
+                    return json.dumps(sd, ensure_ascii=False)
+                except Exception as fb_e:
+                    print(f"    [true_false] single-step fallback also failed: {fb_e}")
+                    # Return what we have (may still be empty — at least not a crash)
+                    return json.dumps(data, ensure_ascii=False)
+
             return json.dumps(data, ensure_ascii=False)
+
         except Exception as e:
-            fallback = {"statement": "", "question": "", "question_format": "true_false",
-                        "question_type": question_type, "error": str(e)}
-            return json.dumps(fallback, ensure_ascii=False)
+            # ★ FIX-1 (NEW): step2 exception → single-step fallback instead of
+            # returning a blank JSON. Previous code produced {"statement": "", ...}
+            # which scored 1.4 across all dimensions.
+            print(f"    [true_false] Exception in step2 ({e}) — single-step fallback")
+            try:
+                rs = self.llm.chat.completions.create(
+                    model="deepseek-chat",
+                    messages=[{"role": "user", "content": _single_step_tf_prompt}],
+                    response_format={"type": "json_object"},
+                    temperature=0.7,
+                    max_tokens=700,
+                )
+                sd = json.loads(rs.choices[0].message.content)
+                sd.setdefault("question_format", "true_false")
+                sd.setdefault("question_type",   question_type)
+                sd["question"] = sd.get("statement", "")
+                return json.dumps(sd, ensure_ascii=False)
+            except Exception as inner_e:
+                return json.dumps(
+                    {"statement": "", "question": "", "question_format": "true_false",
+                     "question_type": question_type, "error": str(inner_e)},
+                    ensure_ascii=False,
+                )
 
 
     def _generate_fill_blank(
@@ -2405,7 +2554,11 @@ FORBIDDEN: generic "explain how X works" questions with no specific angle.
     _FORMAT_DIFFICULTY_THRESHOLD = {
         "mcq_multi":   3,
         "true_false":  3,
-        "fill_blank":  3,   
+        "fill_blank":  1,   # ★ FIX-FILL: difficulty judge scores almost all fill_blank ≤2,
+                            # making threshold=2 trigger retry on 19/20 questions.
+                            # Retried versions score lower on correctness (4.10 vs 4.78 baseline)
+                            # because the LLM over-complicates the sentence while answer logic breaks.
+                            # Set to 1: only truly trivial fill_blank questions get regenerated.
         "open_answer": 3,
     }
 
@@ -2418,8 +2571,14 @@ FORBIDDEN: generic "explain how X works" questions with no specific angle.
         question_type: str,
         question_format: str,
         qb_retriever,
+        progress_callback = None,
     ) -> Tuple[str, str]:
         threshold = self._FORMAT_DIFFICULTY_THRESHOLD.get(question_format, 3)
+
+        def _emit(evt):
+            if progress_callback:
+                try: progress_callback(evt)
+                except Exception: pass
 
         candidate_json = initial_json
         final_method   = initial_method
@@ -2433,6 +2592,11 @@ FORBIDDEN: generic "explain how X works" questions with no specific angle.
             best_score = last_score
             best_json  = candidate_json
 
+        if last_score <= threshold:
+            _emit({"stage": "correction_fail", "attempt": 1, "score": last_score})
+        else:
+            _emit({"stage": "correction_pass", "score": last_score})
+
         for attempt in range(2, MAX_DIFFICULTY_RETRIES + 1):
             if last_score > threshold:
                 break
@@ -2440,6 +2604,7 @@ FORBIDDEN: generic "explain how X works" questions with no specific angle.
             boost_block = _build_difficulty_boost(candidate_json, last_score, last_reasoning)
             print(f"  → Score {last_score}/5 ≤ threshold {threshold}/5. "
                   f"Regenerating (attempt {attempt}) …")
+            _emit({"stage": "generation_retry", "attempt": attempt})
 
             few_shot_examples = []
             if qb_retriever is not None and qb_retriever.available:
@@ -2457,7 +2622,7 @@ FORBIDDEN: generic "explain how X works" questions with no specific angle.
             candidate_json = dispatch[question_format](
                 topic, question_type, graph_context, few_shot_examples,
                 boost_block=boost_block)
-            final_method   = "generated_difficulty_retry"
+            final_method = f"generated_difficulty_retry_x{attempt - 1}"
 
             last_score, last_reasoning = assess_difficulty(self.llm, candidate_json)
             print(f"[DIFFICULTY FILTER | GRAPH_RAG | {question_format} | attempt {attempt}/{MAX_DIFFICULTY_RETRIES}] "
@@ -2465,21 +2630,24 @@ FORBIDDEN: generic "explain how X works" questions with no specific angle.
             if last_score > best_score:
                 best_score = last_score
                 best_json  = candidate_json
+
+            if last_score <= threshold:
+                _emit({"stage": "correction_fail", "attempt": attempt, "score": last_score})
+            else:
+                _emit({"stage": "correction_pass", "score": last_score})
         else:
             if last_score <= threshold:
                 print(f"[DIFFICULTY FILTER | GRAPH_RAG | {question_format}] "
                       f"All {MAX_DIFFICULTY_RETRIES} attempts ≤ {threshold}/5. "
                       f"Accepting best (score={best_score}).")
+                _emit({"stage": "correction_pass", "score": best_score})
 
         # ── Answer verification for verifiable formats ─────────────────
-        # true_false, mcq_multi, and fill_blank can all be wrong even when
-        # the JSON shape looks valid. Run _verify_answer on the best
-        # candidate; if it fails, attempt one more fresh generation before
-        # accepting.
         if question_format in ("true_false", "mcq_multi", "fill_blank"):
             if not self._verify_answer(best_json):
                 print(f"    [_verify_answer] {question_format} verification failed on best candidate. "
                       f"Generating one final attempt…")
+                _emit({"stage": "verify_fail"})
                 few_shot_examples = []
                 if qb_retriever is not None and qb_retriever.available:
                     few_shot_examples = qb_retriever.retrieve_by_format(
@@ -2489,6 +2657,7 @@ FORBIDDEN: generic "explain how X works" questions with no specific angle.
                     "mcq_multi":  self._generate_mcq_multi,
                     "fill_blank": self._generate_fill_blank,
                 }
+                _emit({"stage": "rescue_start"})
                 rescue_json = dispatch[question_format](
                     topic, question_type, graph_context, few_shot_examples)
                 if self._verify_answer(rescue_json):

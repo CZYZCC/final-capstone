@@ -38,39 +38,28 @@ from rag_system.evaluator import AutomatedEvaluator
 from openai import OpenAI
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Experiment configuration  (keep in sync with run_experiment_generate.py)
+# Experiment configuration (matching PPT: 15 topics, 300 questions per model)
 # ──────────────────────────────────────────────────────────────────────────────
 TEXTBOOK_DIR       = "./GraphRAG-Bench/textbooks"
 TRIPLETS_PATH      = "./global_knowledge_graph.json"
 QUESTION_BANK_PATH = "./question_bank.json"
 DATA_DIR           = "experiment_data"
 
+# 15 topics total (matching PPT: 5 formats × 4 questions × 15 topics = 300 per model)
 COMPUTATIONAL_TOPICS = [
-    "hash table", "merge sort", "quick sort", "heap sort",
-    "bfs graph traversal", "dfs graph traversal", "dynamic programming knapsack",
-    "recursion",
-    "binary search", "hash table linear probing", "data structures and algorithms",
+    "merge sort", "bfs graph traversal", "dfs graph traversal", "dynamic programming knapsack",
+    "recursion", "dijkstra shortest path", "binary search",
+    "hash table linear probing", "data structures and algorithms"
 ]
+
 CONCEPTUAL_TOPICS = [
-    "computer networks", "information retrieval",
-    "database systems",
-    "human-computer interaction",
+    "cybersecurity", "computer networks", "information retrieval",
+    "operating systems", "database systems", "human-computer interaction"
 ]
+
 TOPICS   = COMPUTATIONAL_TOPICS + CONCEPTUAL_TOPICS
 FORMATS  = ["mcq_single", "mcq_multi", "true_false", "fill_blank", "open_answer"]
-QUESTIONS_PER_COMBO = 1
-
-# High-score combos generate one extra question each (from case-study analysis)
-HIGH_SCORE_COMBOS: dict = {
-    ("hash table",               "mcq_single"  ): 2,
-    ("hash table linear probing","mcq_single"  ): 2,
-    ("merge sort",               "mcq_single"  ): 2,
-    ("recursion",                "mcq_single"  ): 2,
-    ("quick sort",               "mcq_single"  ): 2,
-    ("computer networks",        "open_answer" ): 2,
-    ("database systems",         "open_answer" ): 2,
-    ("dynamic programming knapsack", "open_answer"): 2,
-}
+QUESTIONS_PER_COMBO = 4  # 15 topics × 5 formats × 4 questions = 300 per model
 
 ALL_MODELS = [
     "no_retrieval",
@@ -78,7 +67,8 @@ ALL_MODELS = [
     "hybrid_rag",
     "unpruned_graph_rag",
     "naive_graph_rag",
-    "graph_rag",          # SmartQG — always run last so GraphRAG baselines are ready first
+    "ablation_no_correction",
+    "graph_rag",
 ]
 
 
@@ -100,10 +90,6 @@ def _md5(d: dict) -> str:
 def _print_banner(text: str):
     bar = "=" * 70
     print(f"\n{bar}\n  {text}\n{bar}")
-
-
-def _target(topic: str, fmt: str) -> int:
-    return HIGH_SCORE_COMBOS.get((topic, fmt), QUESTIONS_PER_COMBO)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -179,7 +165,7 @@ def run_generation(model_name: str, api_key: str) -> str:
         generator = NoRetrievalGenerator(api_key=api_key)
     elif model_name in ("vector_rag", "hybrid_rag"):
         generator = BaselineGenerator(api_key=api_key)
-    else:  # graph_rag, naive_graph_rag, unpruned_graph_rag
+    else:  # graph_rag, naive_graph_rag, unpruned_graph_rag, ablation_no_correction
         generator = SmartGenerator(api_key=api_key)
 
     # ── Checkpoint: count already-generated questions ─────────────────────
@@ -198,7 +184,7 @@ def run_generation(model_name: str, api_key: str) -> str:
         done_so_far = sum(completed_counts.values())
         print(f"[{_ts()}] Resuming — {done_so_far} questions already generated.")
 
-    total_tasks  = sum(_target(t, f) for t in TOPICS for f in FORMATS)
+    total_tasks  = len(TOPICS) * len(FORMATS) * QUESTIONS_PER_COMBO
     current_done = sum(completed_counts.values())
 
     if current_done >= total_tasks:
@@ -213,7 +199,7 @@ def run_generation(model_name: str, api_key: str) -> str:
         for topic in TOPICS:
             q_type = "computational" if topic in COMPUTATIONAL_TOPICS else "conceptual"
             for q_format in FORMATS:
-                needed = _target(topic, q_format) - completed_counts[(topic, q_format)]
+                needed = QUESTIONS_PER_COMBO - completed_counts[(topic, q_format)]
                 for _ in range(needed):
                     t0 = time.time()
                     try:
@@ -244,20 +230,23 @@ def run_generation(model_name: str, api_key: str) -> str:
                                 question_format=q_format,
                             )
 
-                        else:  # graph_rag / naive_graph_rag / unpruned_graph_rag
+                        else:  # graph_rag / naive_graph_rag / unpruned_graph_rag / ablation_no_correction
                             threshold = -1.0 if model_name == "unpruned_graph_rag" else 0.25
+
                             graph_ctx = logic_retriever.retrieve_subgraph(
                                 topic, hops=2,
                                 similarity_threshold=threshold,
-                                question_type=q_type,   # ★ FIX-PRUNE
+                                question_type=q_type,
                             )
                             saved_context = graph_ctx
                             is_naive = (model_name == "naive_graph_rag")
+                            skip_correction = (model_name == "ablation_no_correction")
                             raw_json, method = generator.generate(
                                 topic=topic, graph_context=graph_ctx,
                                 qb_retriever=qb_retriever,
                                 question_format=q_format,
                                 naive_mode=is_naive,
+                                no_self_correction=skip_correction,
                             )
 
                         q_data = json.loads(raw_json)
@@ -417,7 +406,7 @@ def main():
     parser.add_argument(
         "--models", nargs="+", default=ALL_MODELS,
         choices=ALL_MODELS,
-        help="Which models to run (default: all 6).",
+        help="Which models to run (default: all).",
     )
     parser.add_argument(
         "--skip-generate", action="store_true",
