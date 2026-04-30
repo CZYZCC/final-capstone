@@ -10,6 +10,7 @@ experiment_logs/
 experiment_results/
 experiment_analysis/
 experiment_data/raw*.jsonl
+experiment_data/logs_shared/
 
 # ==============================
 # 3. 数据集与构建产物
