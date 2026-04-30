@@ -1,6 +1,6 @@
 # SmartQG: Logical Graph Retrieval-Augmented Generation For Multi-type Question Construction
 
-SmartQG is an advanced framework designed for the automated construction of high-quality, psychometrically sound Computer Science (CS) exam questions. Developed as a Capstone Project at The Hong Kong Polytechnic University by CUI Zhaoyu under the supervision of Dr. HUANG Xiao, the system addresses the limitations of naive RAG (Chunking Fragmentation) and traditional GraphRAG (Neighbor Noise).
+SmartQG is an advanced framework designed for the automated construction of high-quality, psychometrically sound Computer Science (CS) exam questions. Developed as a Capstone Project under the supervision of Prof. HUANG Xiao, the system addresses the limitations of naive RAG (Chunking Fragmentation) and traditional GraphRAG (Neighbor Noise).
 
 ## 🚀 Overview
 SmartQG utilizes an **Executable Algorithm Knowledge Graph (GEAKG)** and a **Seed-and-Prune Logical Graph Retrieval** mechanism to force LLMs to synthesize cross-concept relationships and trigger adversarial edge cases.
@@ -40,4 +40,3 @@ SmartQG utilizes an **Executable Algorithm Knowledge Graph (GEAKG)** and a **See
 
 ## 🎓 Evaluation Dimensions
 * Relevance (5%) | Diversity (10%) | Correctness (20%) | Diagnostic Power (20%) | Multi-Hop Dependency (15%) | Edge-Case Triggering (20%) | Graph-Relational Depth (10%).
-* 
