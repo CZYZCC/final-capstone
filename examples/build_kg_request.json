@@ -1,0 +1,9 @@
+{
+  "topic": "binary search",
+  "texts": [
+    {
+      "node_id": "bs_1",
+      "content": "Binary search compares the target with the middle element of a sorted array. If the target is smaller than the middle element, the algorithm continues on the left half. If the target is larger, it continues on the right half. Binary search has time complexity O(log n)."
+    }
+  ]
+}

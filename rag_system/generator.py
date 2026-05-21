@@ -1175,14 +1175,17 @@ class SmartGenerator:
         self,
         topic: str,
         graph_context: Dict,
-        qb_retriever,
+        qb_retriever=None,
         question_format: str = "mcq_single",
+        question_type: str = None,
         naive_mode: bool = False,
         no_self_correction: bool = False,
         progress_callback = None,   # SSE: callable({"stage":..., ...}) for real-time events
     ) -> Tuple[str, str]:
 
-        question_type  = _choose_question_type(topic, qb_retriever)
+        # Single-I/O mode may provide question_type explicitly.  When it is
+        # omitted, keep the original benchmark behaviour.
+        question_type  = question_type or _choose_question_type(topic, qb_retriever)
         vary_threshold = (
             self.VARY_THRESHOLD_COMP if question_type == "computational"
             else self.VARY_THRESHOLD_CONC
@@ -1230,7 +1233,8 @@ class SmartGenerator:
                 progress_callback=progress_callback
             )
 
-        question_type  = _choose_question_type(topic, qb_retriever)
+        # Keep the explicit question_type in single-I/O mode.
+        question_type  = question_type or _choose_question_type(topic, qb_retriever)
         vary_threshold = (
             self.VARY_THRESHOLD_COMP if question_type == "computational"
             else self.VARY_THRESHOLD_CONC

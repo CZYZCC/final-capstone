@@ -40,3 +40,71 @@ SmartQG utilizes an **Executable Algorithm Knowledge Graph (GEAKG)** and a **See
 
 ## 🎓 Evaluation Dimensions
 * Relevance (5%) | Diversity (10%) | Correctness (20%) | Diagnostic Power (20%) | Multi-Hop Dependency (15%) | Edge-Case Triggering (20%) | Graph-Relational Depth (10%).
+
+## Single JSON I/O Mode
+
+The original benchmark mode is still available, but production-style usage should call the single JSON I/O API.
+
+### 1. Build a KG JSON from one request
+
+```bash
+python single_io.py --mode build_kg \
+  --input examples/build_kg_request.json \
+  --output kg_output.json
+```
+
+Input:
+```json
+{
+  "topic": "hash table linear probing",
+  "texts": [
+    {"node_id": "hash_1", "content": "...source knowledge text..."}
+  ]
+}
+```
+
+Output:
+```json
+{
+  "topic": "hash table linear probing",
+  "knowledge_graph": {
+    "nodes": [{"node_id": "hash_1", "content": "..."}],
+    "relations": [{"subject": "...", "predicate": "HAS_STEP", "object": "..."}],
+    "triplets": [{"head": "...", "relation": "HAS_STEP", "tail": "...", "source_node": "hash_1"}]
+  },
+  "metadata": {"mode": "single_kg_build"}
+}
+```
+
+### 2. Generate one question from an already-built KG
+
+```bash
+python single_io.py --mode generate \
+  --input examples/generate_request.json \
+  --output question_output.json
+```
+
+Input:
+```json
+{
+  "topic": "hash table linear probing",
+  "question_format": "mcq_single",
+  "question_type": "computational",
+  "knowledge_graph": {
+    "nodes": [{"node_id": "n1", "content": "..."}],
+    "relations": [{"subject": "...", "predicate": "HAS_STEP", "object": "..."}]
+  }
+}
+```
+
+Output:
+```json
+{
+  "topic": "hash table linear probing",
+  "question_format": "mcq_single",
+  "question_type": "computational",
+  "question": {"question": "...", "correct_answer": "..."},
+  "answer": "...",
+  "metadata": {"model": "graph_rag_single_io", "kg_nodes": 1, "kg_relations": 1}
+}
+```

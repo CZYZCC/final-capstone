@@ -1,0 +1,25 @@
+{
+  "topic": "hash table linear probing",
+  "question_format": "mcq_single",
+  "question_type": "computational",
+  "knowledge_graph": {
+    "nodes": [
+      {
+        "node_id": "n1",
+        "content": "Linear probing resolves a hash collision by checking the next table slot until an empty slot is found."
+      }
+    ],
+    "relations": [
+      {
+        "subject": "collision at initial slot",
+        "predicate": "HAS_STEP",
+        "object": "linear probe to next available slot"
+      },
+      {
+        "subject": "linear probing",
+        "predicate": "HAS_COMPLEXITY",
+        "object": "expected O(1) search under low load factor, but can degrade under clustering"
+      }
+    ]
+  }
+}

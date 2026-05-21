@@ -3,7 +3,7 @@ import os
 import time
 import re
 import argparse
-from typing import List, Dict
+from typing import List, Dict, Optional, Any
 import random
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -19,14 +19,17 @@ API_KEY = os.getenv("DEEPSEEK_API_KEY")
 # 1. 从教材提取知识图谱三元组 (unchanged)
 # ==========================================
 class LLMGraphExtractor:
-    def __init__(self, api_key: str, output_file: str):
+    def __init__(self, api_key: str, output_file: Optional[str] = None):
         self.llm = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
         self.output_file = output_file
         self.triplets = []
         self.processed_nodes = set()
-        self._load_progress()
+        if self.output_file:
+            self._load_progress()
 
     def _load_progress(self):
+        if not self.output_file:
+            return
         if os.path.exists(self.output_file):
             try:
                 with open(self.output_file, 'r', encoding='utf-8') as f:
@@ -38,11 +41,49 @@ class LLMGraphExtractor:
                 print(f"[!] 读取历史进度失败，将重新开始: {e}")
 
     def _save_progress(self):
+        if not self.output_file:
+            return
         with open(self.output_file, 'w', encoding='utf-8') as f:
             json.dump({
                 "processed_nodes": list(self.processed_nodes),
                 "triplets": self.triplets
             }, f, indent=2, ensure_ascii=False)
+
+    def build_from_texts(self, texts: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Build a small JSON KG from one request instead of scanning benchmark files.
+
+        Expected input item: {"node_id": "optional-id", "content": "text"}.
+        Return format is directly consumable by the single question-generation API:
+        {"nodes": [...], "relations": [...], "triplets": [...]}.
+        """
+        nodes: List[Dict[str, str]] = []
+        triplets: List[Dict[str, Any]] = []
+
+        for i, item in enumerate(texts):
+            node_id = str(item.get("node_id") or f"input_node_{i}")
+            content = str(item.get("content") or item.get("text") or "").strip()
+            if not content:
+                continue
+            nodes.append({"node_id": node_id, "content": content})
+            extracted = self.extract_from_text(node_id, content)
+            triplets.extend(extracted)
+
+        relations = [
+            {
+                "subject": t.get("head", ""),
+                "predicate": t.get("relation", "related"),
+                "object": t.get("tail", ""),
+                "source_node": t.get("source_node", ""),
+            }
+            for t in triplets
+            if t.get("head") and t.get("tail")
+        ]
+
+        return {
+            "nodes": nodes,
+            "relations": relations,
+            "triplets": triplets,
+        }
 
     def clean_json_string(self, raw_str: str) -> str:
         clean_str = re.sub(r'```json\n?', '', raw_str)
