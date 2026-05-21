@@ -1,0 +1,6 @@
+{
+  "topic": "binary search",
+  "question_format": "mcq_single",
+  "question_type": "computational",
+  "kg_path": "kg_store/binary_search.json"
+}

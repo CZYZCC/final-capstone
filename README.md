@@ -108,3 +108,8 @@ Output:
   "metadata": {"model": "graph_rag_single_io", "kg_nodes": 1, "kg_relations": 1}
 }
 ```
+
+
+## Latest Single-I/O Update
+
+The latest single-input/single-output pipeline is documented in [`README_SINGLE_IO.md`](README_SINGLE_IO.md). It supports three KG input styles for single-question generation: inline `knowledge_graph`, file-based `kg_path`, and reusable `kg_id` resolved from `kg_store/<kg_id>.json`.

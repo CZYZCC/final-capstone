@@ -1,48 +1,51 @@
 {
-  "topic": "hash table linear probing",
+  "topic": "binary search",
   "question_format": "mcq_single",
   "question_type": "computational",
   "question": {
-    "question": "A hash table of size 5 uses linear probing. Keys are inserted in order: 0, 5, 10, 15, 20 (all hash to slot 0 via h(k)=k mod 5). After all insertions, how many probes are required to search for a key x that also hashes to slot 0 but is not present in the table? Assume wrap-around and that the search stops when an empty slot is found.",
-    "correct_answer": "5",
-    "rationale": "All slots 0-3 are occupied; searching for a missing key starting at slot 0 probes slots 0,1,2,3,4, then wraps to slot 0 but stops because slot 0 is occupied again? Actually careful: after inserting 5 keys, table is full (load factor 1). Search for a missing key: start at slot 0 (occupied), probe 1 (occupied), 2 (occupied), 3 (occupied), 4 (occupied). Next probe wraps to slot 0, which is already probed; but the algorithm would stop because we've probed all slots? Standard linear probing stops when an empty slot is found; since table is full, the probe sequence would wrap and eventually return to the start, and to avoid infinite loop, one needs to check if the full table has been probed. The question assumes the search stops when an empty slot is found; since none empty, it probes all 5 slots and then may stop after checking the first slot again? To avoid ambiguity, we define that the search terminates after probing all slots once. So number of probes = table size = 5.",
+    "question": "Consider the array [4, 5, 6, 1, 2, 3] and target value 3. If we apply the standard binary search algorithm (which assumes the array is sorted in ascending order), what will be the return value? Assume the algorithm uses integer division for midpoint.",
+    "correct_answer": "-1",
+    "rationale": "Standard binary search requires a sorted array. Here, the array is not sorted; it appears to be a rotated sorted array. The algorithm incorrectly eliminates halves: initially mid=2 (value 6), since 3 < 6, it searches left half [4,5,6]; then mid=0 (value 4), since 3 < 4, it searches left half which is empty. Thus, it returns -1 (not found).",
     "distractors": [
       {
+        "option": "0",
+        "explanation": "[Boundary Error] Assumed target is at the leftmost index; fails to account that binary search eliminates the correct half after first comparison."
+      },
+      {
         "option": "3",
-        "explanation": "[Procedural Omission] Student assumed only the first 3 occupied slots are probed, ignoring wrap-around."
+        "explanation": "[Procedural Omission] Assumed the array is sorted and target is at the expected position (rotated), but standard binary search does not handle rotations."
       },
       {
-        "option": "4",
-        "explanation": "[Boundary Error] Student counted slots 0-3 but forgot slot 4."
-      },
-      {
-        "option": "6",
-        "explanation": "[Operator Confusion] Student counted an extra probe for the wrap-around beyond table size."
+        "option": "5",
+        "explanation": "[Initialization Error] May have started with high index as 5 but incorrectly searched the right half after first comparison, believing 3 > 6."
       }
     ],
     "question_type": "computational",
     "source": "generated_via_graph",
     "generator_scratchpad": {
-      "chosen_algorithm": "Hash table with linear probing",
+      "chosen_algorithm": "Binary search on sorted array, but array is not sorted as assumed.",
       "graph_concepts_used": [
-        "(key 'a') --[HASH_FUNCTION]--> (initial slot 0)",
-        "(collision at slot 0 with key 'b') --[HAS_STEP]--> (linear probe to slot 1)",
-        "(linear probing) --[HAS_COMPLEXITY]--> (expected O(1) under low load, degrades with clustering)"
+        "(binary search) --[REQUIRES]--> (sorted array)",
+        "(binary search) --[HAS_COMPLEXITY]--> (O(log n))",
+        "(target smaller than middle element) --[NEXT_STEP]--> (search left half)",
+        "(target larger than middle element) --[NEXT_STEP]--> (search right half)"
       ],
-      "edge_case_justification": "A full table (load factor ~1) forces many probes due to clustering, causing worst-case search time and making the final position depend on the entire collision chain.",
-      "step_by_step_execution": "Table size=5, h(k)=k mod 5. Insert keys in order: 0, 5, 10, 15, 20. All hash to slot 0. Insert 0 at slot 0. Insert 5: collision, probe to slot 1 (free). Insert 10: collision at 0, probe slot 1 (occupied), slot 2 (free). Insert 15: collision at 0, probe 1,2,3 (free). Insert 20: collision at 0, probe 1,2,3,4 (free). Slots occupied: 0,1,2,3,4. Then search for key x with h(x)=0. Number of probes = 5 (slot 0,1,2,3,4 all occupied, finally slot 5 wraps to 0, stop).",
-      "final_state": "5 probes"
+      "edge_case_justification": "Binary search assumes the input array is sorted. If it is not sorted, the algorithm may incorrectly eliminate the half containing the target or fail to find it. Here, the array is only rotated (a common variant) but NOT sorted, so a standard binary search will fail because comparisons with the middle element do not reliably indicate which half contains the target.",
+      "step_by_step_execution": "Array: [4, 5, 6, 1, 2, 3] (unsorted; target=3). Standard binary search: low=0, high=5, mid=2 (value 6). 3<6, so search left half: low=0, high=1, mid=0 (value=4). 3<4, so low=0, high=-1, exit, returns -1 (not found).",
+      "final_state": "-1"
     },
     "difficulty_score": 3,
-    "difficulty_reasoning": "The question requires a multi-step trace of linear probing on a full hash table (5 insertions, 5 probes to find an empty slot), which involves tracking state across 5 distinct operations. This fits the MODERATE level (score 3) as it is a single-algorithm trace with one edge condition (wrap-around and full table), but does not reach the complexity of score 4 (no cross-concept integration or adversarial depth).",
+    "difficulty_reasoning": "The question requires a multi-step trace (≥5 operations) of binary search on an unsorted array, which is a non-trivial edge condition. The student must simulate the algorithm's steps and realize it returns -1 due to the unsorted input, fitting PATH B of score 3.",
     "question_format": "mcq_single"
   },
-  "answer": "5",
+  "answer": "-1",
   "metadata": {
     "method": "generated_difficulty_retry_x2",
     "model": "graph_rag_single_io",
-    "generation_time": 53.63,
-    "kg_nodes": 1,
-    "kg_relations": 2
+    "generation_time": 60.11,
+    "kg_nodes": 4,
+    "kg_relations": 4,
+    "kg_source": "kg_path",
+    "kg_path": "/Users/ll13837212992/Desktop/final capstone/kg_store/binary_search.json"
   }
 }

@@ -1,0 +1,76 @@
+{
+  "topic": "binary search",
+  "kg_id": "binary_search",
+  "knowledge_graph": {
+    "nodes": [
+      {
+        "node_id": "bs_1",
+        "content": "Binary search works on a sorted array by comparing the target value with the middle element."
+      },
+      {
+        "node_id": "bs_2",
+        "content": "If the target is smaller than the middle element, binary search continues on the left half."
+      },
+      {
+        "node_id": "bs_3",
+        "content": "If the target is larger than the middle element, binary search continues on the right half."
+      },
+      {
+        "node_id": "bs_4",
+        "content": "Binary search has time complexity O(log n) because each comparison halves the search interval."
+      }
+    ],
+    "relations": [
+      {
+        "subject": "binary search",
+        "predicate": "REQUIRES",
+        "object": "sorted array",
+        "source_node": "bs_1"
+      },
+      {
+        "subject": "target smaller than middle element",
+        "predicate": "NEXT_STEP",
+        "object": "search left half",
+        "source_node": "bs_2"
+      },
+      {
+        "subject": "target larger than middle element",
+        "predicate": "NEXT_STEP",
+        "object": "search right half",
+        "source_node": "bs_3"
+      },
+      {
+        "subject": "binary search",
+        "predicate": "HAS_COMPLEXITY",
+        "object": "O(log n)",
+        "source_node": "bs_4"
+      }
+    ],
+    "triplets": [
+      {
+        "head": "binary search",
+        "relation": "REQUIRES",
+        "tail": "sorted array",
+        "source_node": "bs_1"
+      },
+      {
+        "head": "target smaller than middle element",
+        "relation": "NEXT_STEP",
+        "tail": "search left half",
+        "source_node": "bs_2"
+      },
+      {
+        "head": "target larger than middle element",
+        "relation": "NEXT_STEP",
+        "tail": "search right half",
+        "source_node": "bs_3"
+      },
+      {
+        "head": "binary search",
+        "relation": "HAS_COMPLEXITY",
+        "tail": "O(log n)",
+        "source_node": "bs_4"
+      }
+    ]
+  }
+}
